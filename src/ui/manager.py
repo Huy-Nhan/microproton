@@ -319,21 +319,42 @@ class AppManagerWindow:
                 else:
                     w_env["WINE"] = proton_path
                     
+                def check_installed(pkg):
+                    log_file = os.path.join(global_pfx, "winetricks.log")
+                    if os.path.exists(log_file):
+                        try:
+                            with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
+                                return pkg in f.read()
+                        except Exception:
+                            pass
+                    return False
+
                 # Step 4: Install corefonts
                 progress_win.after(0, lambda: (lbl_status.configure(text=steps[3][0]), progress_bar.set(steps[3][1])))
                 subprocess.run([winetricks_path, "-q", "corefonts"], env=w_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if not check_installed("corefonts"):
+                    raise Exception("Không thể cài đặt gói phông chữ corefonts (vui lòng kiểm tra kết nối mạng).")
                 
                 # Step 5: Install msxml6 riched20
                 progress_win.after(0, lambda: (lbl_status.configure(text=steps[4][0]), progress_bar.set(steps[4][1])))
                 subprocess.run([winetricks_path, "-q", "msxml6", "riched20", "riched30"], env=w_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if not check_installed("msxml6") or not check_installed("riched20"):
+                    raise Exception("Không thể cài đặt thư viện msxml6/riched20 (vui lòng kiểm tra kết nối mạng).")
                 
                 # Step 6: Install vcrun2015
                 progress_win.after(0, lambda: (lbl_status.configure(text=steps[5][0]), progress_bar.set(steps[5][1])))
                 subprocess.run([winetricks_path, "-q", "vcrun2015"], env=w_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if not check_installed("vcrun2015"):
+                    raise Exception("Không thể cài đặt Visual C++ Runtime vcrun2015 (vui lòng kiểm tra kết nối mạng).")
                 
                 progress_win.after(0, lambda: (progress_bar.set(1.0), progress_win.destroy(), messagebox.showinfo("Thành công", "Tối ưu hóa môi trường mặc định hoàn tất!", parent=self.root)))
             except Exception as e:
-                progress_win.after(0, lambda: (progress_win.destroy(), messagebox.showerror("Lỗi", f"Lỗi tối ưu hóa hệ thống: {e}", parent=self.root)))
+                if os.path.exists(global_prefix):
+                    try:
+                        shutil.rmtree(global_prefix)
+                    except Exception:
+                        pass
+                progress_win.after(0, lambda: (progress_win.destroy(), messagebox.showerror("Lỗi", f"Lỗi tối ưu hóa hệ thống: {e}\n\nVui lòng kiểm tra kết nối mạng Internet và thử lại.", parent=self.root)))
                 
         threading.Thread(target=run_optimization, daemon=True).start()
 
