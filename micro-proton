@@ -10,32 +10,64 @@ import shutil
 STEAM_PATH = os.path.expanduser("~/.local/share/Steam")
 STEAM_COMMON = os.path.join(STEAM_PATH, "steamapps/common")
 BASE_PREFIX_DIR = os.path.expanduser("~/.local/share/micro-proton/prefixes")
+APPLICATIONS_DIR = os.path.expanduser("~/.local/share/applications")
+MICRO_PROTON_BIN = os.path.abspath(sys.argv[0])
 
 def find_proton_versions():
-    """Finds all installed Proton versions in Steam common directory."""
-    if not os.path.exists(STEAM_COMMON):
-        return []
-    
+    """Finds all installed Proton versions in Steam directories (common and compatibilitytools.d)."""
     versions = []
-    for item in os.listdir(STEAM_COMMON):
-        if item.startswith("Proton") and os.path.isdir(os.path.join(STEAM_COMMON, item)):
-            proton_script = os.path.join(STEAM_COMMON, item, "proton")
-            if os.path.exists(proton_script):
-                versions.append((item, proton_script))
     
-    # Sort: Proton 10.0, Proton 9.0, Proton - Experimental
+    # 1. Scan steamapps/common
+    if os.path.exists(STEAM_COMMON):
+        for item in os.listdir(STEAM_COMMON):
+            if item.startswith("Proton") and os.path.isdir(os.path.join(STEAM_COMMON, item)):
+                proton_script = os.path.join(STEAM_COMMON, item, "proton")
+                if os.path.exists(proton_script):
+                    versions.append((item, proton_script))
+                    
+    # 2. Scan compatibilitytools.d
+    compat_dir = os.path.join(STEAM_PATH, "compatibilitytools.d")
+    if os.path.exists(compat_dir):
+        for item in os.listdir(compat_dir):
+            item_path = os.path.join(compat_dir, item)
+            if os.path.isdir(item_path):
+                proton_script = os.path.join(item_path, "proton")
+                if os.path.exists(proton_script):
+                    versions.append((item, proton_script))
+                    
+    # Deduplicate by script path
+    seen_paths = set()
+    unique_versions = []
+    for name, path in versions:
+        if path not in seen_paths:
+            seen_paths.add(path)
+            unique_versions.append((name, path))
+            
+    # Sort: Proton/GE-Proton 10.x first, then 9.x, then Experimental
     def sort_key(v):
         name = v[0]
         if "Experimental" in name:
             return 999.0
-        # Extract numbers
-        numbers = re.findall(r"\d+\.\d+|\d+", name)
+        numbers = re.findall(r"\d+", name)
         if numbers:
+            if len(numbers) >= 2:
+                return float(f"{numbers[0]}.{numbers[1].zfill(3)}")
             return float(numbers[0])
         return 0.0
         
-    versions.sort(key=sort_key, reverse=True)
-    return versions
+    unique_versions.sort(key=sort_key, reverse=True)
+    return unique_versions
+
+def get_proton_path(proton_name):
+    versions = find_proton_versions()
+    if not versions:
+        return None
+    if not proton_name:
+        return versions[0][1] # Default to newest
+    for name, path in versions:
+        if name == proton_name or proton_name in name:
+            return path
+    return versions[0][1] # Fallback
 
 def select_file_via_zenity():
     """Uses Zenity to prompt the user to select an .exe file."""
@@ -53,16 +85,141 @@ def show_message(text, timeout=3, title="MicroProton"):
     subprocess.Popen(["zenity", "--info", f"--text={text}", f"--timeout={timeout}", f"--title={title}"])
 
 def get_prefix_dir(exe_path):
-    """Generates a clean, unique WINEPREFIX path for the executable."""
-    abs_path = os.path.abspath(exe_path)
-    # Generate unique hash of the path to avoid conflicts
-    path_hash = hashlib.md5(abs_path.encode('utf-8')).hexdigest()[:8]
-    # Clean up name for folder
-    base_name = os.path.basename(abs_path)
-    clean_name = re.sub(r'[^a-zA-Z0-9_-]', '_', base_name)
-    return os.path.join(BASE_PREFIX_DIR, f"{clean_name}_{path_hash}")
+    """Returns the shared global Proton Prefix directory."""
+    return os.path.join(BASE_PREFIX_DIR, "global_default")
 
-def run_command(proton_path, prefix_dir, exe_path, action="run"):
+def make_exec_line(prefix_dir, exe_path, proton="", mangohud=False, gamemode=False, wined3d=False, virtual_desktop="", unikey=False):
+    cmd = [f'"{MICRO_PROTON_BIN}"']
+    if prefix_dir:
+        cmd.extend(["--prefix", f'"{prefix_dir}"'])
+    if proton:
+        cmd.extend(["--proton", f'"{proton}"'])
+    if mangohud:
+        cmd.append("--mangohud")
+    if gamemode:
+        cmd.append("--gamemode")
+    if wined3d:
+        cmd.append("--wined3d")
+    if virtual_desktop:
+        cmd.extend(["--virtual-desktop", f'"{virtual_desktop}"'])
+    if unikey:
+        cmd.append("--unikey")
+    cmd.append(f'"{exe_path}"')
+    return " ".join(cmd)
+
+def resolve_case_insensitive_path(path):
+    """Resolves a case-insensitive path on a case-sensitive filesystem."""
+    path = os.path.abspath(path)
+    if os.path.exists(path):
+        return path
+        
+    parts = path.split(os.sep)
+    current = "/"
+    if os.name == 'nt':
+        current = parts[0] + os.sep
+        parts = parts[1:]
+    else:
+        parts = parts[1:]
+        
+    for part in parts:
+        if not part:
+            continue
+        found = False
+        if os.path.isdir(current):
+            for entry in os.listdir(current):
+                if entry.lower() == part.lower():
+                    current = os.path.join(current, entry)
+                    found = True
+                    break
+        if not found:
+            current = os.path.join(current, part)
+    return current
+
+def parse_lnk_file(lnk_path):
+    """Parses a Windows .lnk file to extract the target path."""
+    try:
+        with open(lnk_path, "rb") as f:
+            data = f.read()
+            
+        # ASCII search
+        match_ascii = re.findall(rb'[A-Za-z]:\\[^\x00-\x1f"<>|]*\.exe', data, re.IGNORECASE)
+        if match_ascii:
+            return match_ascii[-1].decode('ascii', errors='ignore')
+            
+        # UTF-16 search
+        data_utf16 = data.decode('utf-16-le', errors='ignore')
+        match_utf16 = re.findall(r'[A-Za-z]:\\[^"<>\x00-\x1f]*\.exe', data_utf16, re.IGNORECASE)
+        if match_utf16:
+            return match_utf16[-1]
+    except Exception as e:
+        print(f"Error parsing .lnk: {e}")
+    return None
+
+def find_lnk_files(prefix_dir):
+    """Finds all .lnk files in the prefix desktop and start menu directories."""
+    pfx = os.path.join(prefix_dir, "pfx")
+    if not os.path.exists(pfx):
+        return set()
+        
+    lnk_files = set()
+    search_dirs = [
+        os.path.join(pfx, "drive_c/users/Public/Desktop"),
+        os.path.join(pfx, "drive_c/users/steamuser/Desktop"),
+        os.path.join(pfx, "drive_c/users/Public/Start Menu"),
+        os.path.join(pfx, "drive_c/users/steamuser/Start Menu"),
+    ]
+    
+    for d in search_dirs:
+        if os.path.exists(d):
+            for root, dirs, files in os.walk(d):
+                for f in files:
+                    if f.lower().endswith(".lnk"):
+                        lnk_files.add(os.path.join(root, f))
+    return lnk_files
+
+def find_exe_files(prefix_dir):
+    """Finds all .exe files in drive_c of the prefix."""
+    drive_c = os.path.join(prefix_dir, "pfx", "drive_c")
+    if not os.path.exists(drive_c):
+        return set()
+        
+    exe_files = set()
+    for root, dirs, files in os.walk(drive_c):
+        for f in files:
+            if f.lower().endswith(".exe"):
+                exe_files.add(os.path.join(root, f))
+    return exe_files
+
+def extract_app_icon(exe_path, app_hash):
+    """Extracts icon from exe using icoextract and converts to PNG if possible."""
+    icon_dir = os.path.expanduser("~/.local/share/icons")
+    os.makedirs(icon_dir, exist_ok=True)
+    
+    ico_output = os.path.join(icon_dir, f"micro-proton-app-{app_hash}.ico")
+    png_output = os.path.join(icon_dir, f"micro-proton-app-{app_hash}.png")
+    
+    try:
+        from icoextract import IconExtractor
+        extractor = IconExtractor(exe_path)
+        extractor.export_icon(ico_output)
+        
+        if shutil.which("convert"):
+            subprocess.run(["convert", ico_output, png_output], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if os.path.exists(png_output):
+                try:
+                    os.remove(ico_output)
+                except Exception:
+                    pass
+                return png_output
+                
+        if os.path.exists(ico_output):
+            return ico_output
+    except Exception as e:
+        print(f"Error extracting icon for {exe_path}: {e}")
+        
+    return "com.valvesoftware.Steam"
+
+def run_command(proton_path, prefix_dir, exe_path, action="run", mangohud=False, gamemode=False, wined3d=False, virtual_desktop=None, unikey=False):
     """Runs Proton with the specified action and environment."""
     os.makedirs(prefix_dir, exist_ok=True)
     
@@ -71,15 +228,48 @@ def run_command(proton_path, prefix_dir, exe_path, action="run"):
     env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = STEAM_PATH
     env["STEAM_COMPAT_DATA_PATH"] = prefix_dir
     
-    # Force XIM variables for Vietnamese typing (Fcitx5 / IBus)
-    system_xim = os.environ.get("XMODIFIERS", "@im=fcitx")
-    env["XMODIFIERS"] = system_xim
-    env["GTK_IM_MODULE"] = "xim"
-    env["QT_IM_MODULE"] = "xim"
-    if "ibus" in system_xim:
-        env["SDL_IM_MODULE"] = "ibus"
+    # Apply MangoHud
+    if mangohud:
+        env["MANGOHUD"] = "1"
+        
+    # Apply Wine3D (OpenGL fallback)
+    if wined3d:
+        env["PROTON_USE_WINED3D"] = "1"
+    
+    # Auto detect Vietnamese IME (fcitx or ibus)
+    is_fcitx = False
+    is_ibus = False
+    xmods = os.environ.get("XMODIFIERS", "")
+    if "fcitx" in xmods:
+        is_fcitx = True
+    elif "ibus" in xmods:
+        is_ibus = True
     else:
+        # Fallback to active processes
+        try:
+            if subprocess.run(["pgrep", "-x", "fcitx5"], stdout=subprocess.DEVNULL).returncode == 0:
+                is_fcitx = True
+            elif subprocess.run(["pgrep", "-x", "fcitx"], stdout=subprocess.DEVNULL).returncode == 0:
+                is_fcitx = True
+            elif subprocess.run(["pgrep", "-x", "ibus-daemon"], stdout=subprocess.DEVNULL).returncode == 0:
+                is_ibus = True
+        except Exception:
+            pass
+            
+    # Default to fcitx if none detected to ensure variables are set
+    if not is_fcitx and not is_ibus:
+        is_fcitx = True
+        
+    if is_fcitx:
+        env["XMODIFIERS"] = "@im=fcitx"
+        env["GTK_IM_MODULE"] = "xim"
+        env["QT_IM_MODULE"] = "xim"
         env["SDL_IM_MODULE"] = "fcitx"
+    elif is_ibus:
+        env["XMODIFIERS"] = "@im=ibus"
+        env["GTK_IM_MODULE"] = "xim"
+        env["QT_IM_MODULE"] = "xim"
+        env["SDL_IM_MODULE"] = "ibus"
     
     # Check if this is the first run for this prefix
     p_wine = os.path.join(prefix_dir, "pfx")
@@ -88,24 +278,58 @@ def run_command(proton_path, prefix_dir, exe_path, action="run"):
     if is_first_run:
         show_message("Đang tạo môi trường chạy (Prefix) lần đầu cho ứng dụng này.\nVui lòng đợi vài giây...", timeout=4)
         
-    # Apply input method registry settings if not already applied
+    # Apply input method registry settings
     reg_file_path = os.path.join(prefix_dir, "input_style.reg")
-    if not os.path.exists(reg_file_path) and action == "run":
-        # Write reg file to allow Fcitx/IBus candidate windows
+    if action == "run":
         try:
             with open(reg_file_path, "w") as f:
                 f.write("Windows Registry Editor Version 5.00\n\n")
                 f.write("[HKEY_CURRENT_USER\\Software\\Wine\\X11 Driver]\n")
-                f.write('"InputStyle"="overthespot"\n')
-            
-            # Silent import by running regedit (this also initializes the prefix)
+                f.write('"InputStyle"="none"\n')
+            # Import settings (also initializes prefix)
             subprocess.run([proton_path, "run", "regedit", reg_file_path], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as e:
             print(f"Lỗi thiết lập bộ gõ: {e}")
             
+        # Start UniKey if enabled
+        if unikey:
+            unikey_exe = os.path.join(prefix_dir, "pfx/drive_c/UniKey/UniKeyNT.exe")
+            if os.path.exists(unikey_exe):
+                # Run UniKeyNT.exe in the background of this Prefix
+                subprocess.Popen([proton_path, "run", unikey_exe], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+    # Apply Virtual Desktop settings
+    reg_vd_path = os.path.join(prefix_dir, "virtual_desktop.reg")
+    if virtual_desktop:
+        try:
+            with open(reg_vd_path, "w") as f:
+                f.write("Windows Registry Editor Version 5.00\n\n")
+                f.write("[HKEY_CURRENT_USER\\Software\\Wine\\Explorer]\n")
+                f.write('"Desktop"="Default"\n\n')
+                f.write("[HKEY_CURRENT_USER\\Software\\Wine\\Explorer\\Desktops]\n")
+                f.write(f'"Default"="{virtual_desktop}"\n')
+            subprocess.run([proton_path, "run", "regedit", reg_vd_path], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            print(f"Lỗi cấu hình Virtual Desktop: {e}")
+    else:
+        # Disable virtual desktop if registry was previously set
+        if os.path.exists(p_wine):
+            try:
+                with open(reg_vd_path, "w") as f:
+                    f.write("Windows Registry Editor Version 5.00\n\n")
+                    f.write("[HKEY_CURRENT_USER\\Software\\Wine\\Explorer]\n")
+                    f.write('"Desktop"=-\n')
+                subprocess.run([proton_path, "run", "regedit", reg_vd_path], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception as e:
+                print(f"Lỗi gỡ cấu hình Virtual Desktop: {e}")
+            
     cmd = [proton_path, action]
-    if action == "run":
+    if action == "run" and exe_path:
         cmd.append(exe_path)
+        
+    # Apply gamemode prefix
+    if gamemode and shutil.which("gamemoderun"):
+        cmd = ["gamemoderun"] + cmd
         
     # Execute the process
     try:
@@ -120,12 +344,10 @@ def main():
         subprocess.run(["zenity", "--error", "--text=Không tìm thấy Proton của Steam trên hệ thống.\nVui lòng cài đặt Steam và tải ít nhất một phiên bản Proton (ví dụ Proton 10.0).", "--title=Lỗi hệ thống"])
         sys.exit(1)
         
-    proton_name, proton_path = proton_list[0]
-    
-    # Parse options
+    # Parse options manually
     args = sys.argv[1:]
     
-    # Parse custom prefix path if passed
+    # 1. Custom prefix path
     custom_prefix = None
     if "--prefix" in args:
         try:
@@ -137,16 +359,76 @@ def main():
         except ValueError:
             pass
 
+    # 2. Selected Proton version
+    selected_proton_name = None
+    if "--proton" in args:
+        try:
+            idx = args.index("--proton")
+            if idx + 1 < len(args):
+                selected_proton_name = args[idx + 1]
+                args.pop(idx + 1)
+                args.pop(idx)
+        except ValueError:
+            pass
+
+    # Find matching Proton
+    proton_name, proton_path = proton_list[0]
+    if selected_proton_name:
+        found = False
+        for name, path in proton_list:
+            if name == selected_proton_name or selected_proton_name in name:
+                proton_name = name
+                proton_path = path
+                found = True
+                break
+        if not found:
+            print(f"Không tìm thấy Proton phiên bản: {selected_proton_name}. Dùng mặc định: {proton_name}")
+
+    # 3. Game enhancement flags
+    mangohud = False
+    if "--mangohud" in args:
+        mangohud = True
+        args.remove("--mangohud")
+
+    gamemode = False
+    if "--gamemode" in args:
+        gamemode = True
+        args.remove("--gamemode")
+
+    wined3d = False
+    if "--wined3d" in args:
+        wined3d = True
+        args.remove("--wined3d")
+
+    unikey = False
+    if "--unikey" in args:
+        unikey = True
+        args.remove("--unikey")
+
+    virtual_desktop = None
+    if "--virtual-desktop" in args:
+        try:
+            idx = args.index("--virtual-desktop")
+            if idx + 1 < len(args) and not args[idx + 1].startswith("-"):
+                virtual_desktop = args[idx + 1]
+                args.pop(idx + 1)
+            else:
+                virtual_desktop = "1280x720"
+            args.pop(idx)
+        except ValueError:
+            pass
+
+    # Determine action and executable
     action = "run"
     exe_path = None
     
     if not args:
-        # No arguments, open GUI file selector
+        # No arguments left, open GUI file selector
         exe_path = select_file_via_zenity()
         if not exe_path:
             sys.exit(0)
     else:
-        # Check flags
+        # Check flags/actions
         if args[0] in ["--winecfg", "-c"]:
             action = "winecfg"
             if len(args) > 1:
@@ -166,7 +448,7 @@ def main():
         if action != "run" and not exe_path:
             # Run action on default global prefix if no file is specified
             prefix_dir = custom_prefix or os.path.join(BASE_PREFIX_DIR, "global_default")
-            run_command(proton_path, prefix_dir, None, action)
+            run_command(proton_path, prefix_dir, None, action, mangohud, gamemode, wined3d, virtual_desktop, unikey)
             sys.exit(0)
         subprocess.run(["zenity", "--error", f"--text=Đường dẫn tệp tin không hợp lệ hoặc không tồn tại:\n{exe_path}", "--title=Lỗi đường dẫn"])
         sys.exit(1)
@@ -188,7 +470,91 @@ def main():
             # Fallback
             subprocess.run([proton_path, "run", "wineserver", "-k"], env=env)
     else:
-        run_command(proton_path, prefix_dir, exe_path, action)
+        # Pre-scan links and exes
+        old_links = set()
+        old_exes = set()
+        if action == "run" and exe_path and exe_path.lower().endswith(".exe"):
+            old_links = find_lnk_files(prefix_dir)
+            old_exes = find_exe_files(prefix_dir)
+            
+        run_command(proton_path, prefix_dir, exe_path, action, mangohud, gamemode, wined3d, virtual_desktop, unikey)
+        
+        # Post-scan and auto-import
+        if action == "run" and exe_path and exe_path.lower().endswith(".exe"):
+            import time
+            time.sleep(1.5) # Wait for file writes
+            
+            new_links = find_lnk_files(prefix_dir)
+            new_links_added = new_links - old_links
+            
+            target_installed_exe = None
+            app_name = None
+            
+            if new_links_added:
+                valid_links = [l for l in new_links_added if "uninst" not in l.lower() and "uninstall" not in l.lower()]
+                if valid_links:
+                    lnk_to_use = valid_links[0]
+                    win_target = parse_lnk_file(lnk_to_use)
+                    if win_target:
+                        rel_target = win_target.replace("\\", "/")
+                        if rel_target.upper().startswith("C:"):
+                            rel_target = "pfx/drive_c" + rel_target[2:]
+                        linux_target = os.path.join(prefix_dir, rel_target)
+                        linux_target = resolve_case_insensitive_path(linux_target)
+                        if os.path.exists(linux_target):
+                            target_installed_exe = linux_target
+                            app_name = os.path.splitext(os.path.basename(lnk_to_use))[0]
+            
+            if not target_installed_exe:
+                new_exes = find_exe_files(prefix_dir)
+                new_exes_added = new_exes - old_exes
+                if new_exes_added:
+                    valid_exes = [e for e in new_exes_added if "uninst" not in e.lower() and "uninstall" not in e.lower()]
+                    if valid_exes:
+                        valid_exes.sort(key=lambda x: os.path.getsize(x), reverse=True)
+                        target_installed_exe = valid_exes[0]
+                        app_name = os.path.splitext(os.path.basename(target_installed_exe))[0]
+                        app_name = app_name.replace("_", " ").replace("-", " ").title()
+                        
+            if target_installed_exe and app_name:
+                if os.path.abspath(target_installed_exe) != os.path.abspath(exe_path):
+                    print(f"Phát hiện ứng dụng đã cài đặt: {app_name} -> {target_installed_exe}")
+                    
+                    orig_exe_hash = hashlib.md5(os.path.abspath(exe_path).encode('utf-8')).hexdigest()[:8]
+                    icon_path = extract_app_icon(target_installed_exe, orig_exe_hash)
+                    
+                    desktop_filename = f"micro-proton-app-{orig_exe_hash}.desktop"
+                    desktop_path = os.path.join(APPLICATIONS_DIR, desktop_filename)
+                    
+                    exec_line = make_exec_line(
+                        prefix_dir=prefix_dir, 
+                        exe_path=target_installed_exe,
+                        proton=selected_proton_name or "",
+                        mangohud=mangohud,
+                        gamemode=gamemode,
+                        wined3d=wined3d,
+                        virtual_desktop=virtual_desktop or "",
+                        unikey=unikey
+                    )
+                    
+                    content = f"""[Desktop Entry]
+Name={app_name}
+Exec={exec_line}
+Icon={icon_path}
+Terminal=false
+Type=Application
+Categories=Game;Emulator;Utility;
+MimeType=application/x-ms-dos-executable;
+Comment=Chạy bằng MicroProton
+X-MicroProton-Exe={target_installed_exe}
+"""
+                    try:
+                        with open(desktop_path, "w", encoding="utf-8") as f:
+                            f.write(content)
+                        subprocess.run(["update-desktop-database", APPLICATIONS_DIR])
+                        show_message(f"Đã phát hiện và cấu hình tự động cho ứng dụng:\nTên: {app_name}\nFile chạy: {os.path.basename(target_installed_exe)}", timeout=5)
+                    except Exception as e:
+                        print(f"Lỗi ghi file .desktop: {e}")
 
 if __name__ == "__main__":
     main()
