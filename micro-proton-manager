@@ -345,12 +345,26 @@ class AppManagerWindow:
         # Header container
         header_container = ctk.CTkFrame(left_frame, fg_color="transparent")
         header_container.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 5))
+        header_container.grid_columnconfigure(0, weight=1)
+        header_container.grid_columnconfigure(1, weight=0)
         
         lbl_header = ctk.CTkLabel(header_container, text="MicroProton", font=("Helvetica", 22, "bold"), anchor="w")
-        lbl_header.pack(fill=tk.X)
+        lbl_header.grid(row=0, column=0, sticky="w")
+        
+        btn_donate = ctk.CTkButton(
+            header_container, 
+            text="☕ Ủng hộ", 
+            font=("Helvetica", 11, "bold"), 
+            fg_color="#2eb85c", 
+            hover_color="#229949",
+            width=75,
+            height=26,
+            command=self.open_donate_dialog
+        )
+        btn_donate.grid(row=0, column=1, sticky="e", pady=(2, 0))
         
         lbl_subheader = ctk.CTkLabel(header_container, text="Quản lý & Tối ưu ứng dụng Windows", font=("Helvetica", 11), text_color="gray", anchor="w")
-        lbl_subheader.pack(fill=tk.X)
+        lbl_subheader.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
         
         # Add button
         btn_add = ctk.CTkButton(
@@ -1172,6 +1186,9 @@ class AppManagerWindow:
     def open_proton_downloader(self):
         ProtonDownloaderDialog(self.root, self.refresh_proton_dropdown)
 
+    def open_donate_dialog(self):
+        DonateDialog(self.root)
+
     def launch_global_taskbar(self):
         proton_versions = find_proton_versions()
         if not proton_versions:
@@ -1826,6 +1843,174 @@ X-MicroProton-Exe={exe}
             self.destroy()
         except Exception as e:
             messagebox.showerror("Lỗi", f"Không thể lưu ứng dụng: {e}", parent=self)
+
+class DonateDialog(ctk.CTkToplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Ủng hộ tác giả (Donate)")
+        self.geometry("680x340")
+        self.resizable(False, False)
+        
+        # Focus/Grab
+        self.transient(parent)
+        self.after(250, lambda: self.grab_set())
+        
+        lbl_title = ctk.CTkLabel(self, text="☕ Ủng hộ phát triển MicroProton", font=("Helvetica", 16, "bold"))
+        lbl_title.pack(pady=(15, 10))
+        
+        # Main layout frame (columns side-by-side)
+        main_layout = ctk.CTkFrame(self, fg_color="transparent")
+        main_layout.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 15))
+        
+        # Left column (QR Code)
+        qr_frame = ctk.CTkFrame(main_layout, width=200, height=200)
+        qr_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
+        qr_frame.pack_propagate(False) # Keep width/height fixed
+        
+        # Get the actual directory (resolving symbolic links)
+        real_dir = os.path.dirname(os.path.realpath(__file__))
+        
+        # Check for donate_qr in the project directory
+        search_paths = [
+            os.path.join(real_dir, "images", "donate_qr.jpg"),
+            os.path.join(real_dir, "images", "donate_qr.png"),
+            os.path.join(real_dir, "donate_qr.png"),
+            os.path.join(real_dir, "donate_qr.jpg")
+        ]
+        
+        qr_path = None
+        for path in search_paths:
+            if os.path.exists(path):
+                qr_path = path
+                break
+        
+        qr_loaded = False
+        if qr_path:
+            try:
+                # Workaround when PIL.ImageTk is not installed on the system (very common on Linux/Fedora/Ubuntu)
+                # We use PIL.Image to open and resize, save it to a temporary PNG,
+                # then load it using native Tkinter PhotoImage (which natively supports PNG in Tk 8.6+)
+                from PIL import Image
+                img = Image.open(qr_path)
+                img_resized = img.resize((180, 180), Image.LANCZOS)
+                
+                import tempfile
+                temp_png = os.path.join(tempfile.gettempdir(), f"micro_proton_donate_qr_{os.getuid()}.png")
+                img_resized.save(temp_png, "PNG")
+                
+                tk_image = tk.PhotoImage(file=temp_png)
+                
+                # Get the background color of parent frame to blend in
+                bg_color = qr_frame.cget("fg_color")
+                if isinstance(bg_color, (list, tuple)):
+                    bg_color = bg_color[1] if ctk.get_appearance_mode() == "Dark" else bg_color[0]
+                elif not bg_color:
+                    bg_color = "transparent"
+                    
+                if bg_color == "transparent":
+                    # Fallback default dark/light colors if transparent
+                    bg_color = "#2b2b2b" if ctk.get_appearance_mode() == "Dark" else "#dbdbdb"
+                
+                lbl_qr = tk.Label(qr_frame, image=tk_image, bg=bg_color, bd=0)
+                lbl_qr.image = tk_image  # Keep reference to prevent garbage collection
+                lbl_qr.pack(expand=True)
+                qr_loaded = True
+            except Exception as e:
+                print(f"Error loading QR code: {e}")
+                
+        if not qr_loaded:
+            # Placeholder text and style
+            lbl_qr_placeholder = ctk.CTkLabel(
+                qr_frame, 
+                text="[ Chưa có mã QR ]\n\nHãy chép ảnh mã QR của bạn\nvào thư mục ứng dụng với tên\n'images/donate_qr.jpg' để hiển thị.",
+                font=("Helvetica", 10, "italic"),
+                text_color="gray",
+                justify="center"
+            )
+            lbl_qr_placeholder.pack(expand=True, padx=10, pady=10)
+            
+        # Right column (Details)
+        details_frame = ctk.CTkFrame(main_layout)
+        details_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(10, 0))
+        details_frame.grid_columnconfigure(1, weight=1)
+        
+        # Bank info
+        lbl_bank_title = ctk.CTkLabel(details_frame, text="🏦 Ngân hàng:", font=("Helvetica", 11, "bold"))
+        lbl_bank_title.grid(row=0, column=0, sticky="w", padx=15, pady=(20, 8))
+        
+        self.bank_info = "MB Bank: 0833313668 - Đỗ Huy Nhân"
+        lbl_bank_val = ctk.CTkLabel(details_frame, text=self.bank_info, font=("Helvetica", 11))
+        lbl_bank_val.grid(row=0, column=1, sticky="w", padx=5, pady=(20, 8))
+        
+        btn_copy_bank = ctk.CTkButton(
+            details_frame, 
+            text="Sao chép", 
+            width=70, 
+            height=22, 
+            font=("Helvetica", 10),
+            command=lambda: self.copy_to_clipboard(self.bank_info, btn_copy_bank)
+        )
+        btn_copy_bank.grid(row=0, column=2, padx=(5, 15), pady=(20, 8))
+        
+        # Momo info
+        lbl_momo_title = ctk.CTkLabel(details_frame, text="📱 Ví Momo:", font=("Helvetica", 11, "bold"))
+        lbl_momo_title.grid(row=1, column=0, sticky="w", padx=15, pady=8)
+        
+        self.momo_info = "0833313668 - Đỗ Huy Nhân"
+        lbl_momo_val = ctk.CTkLabel(details_frame, text=self.momo_info, font=("Helvetica", 11))
+        lbl_momo_val.grid(row=1, column=1, sticky="w", padx=5, pady=8)
+        
+        btn_copy_momo = ctk.CTkButton(
+            details_frame, 
+            text="Sao chép", 
+            width=70, 
+            height=22, 
+            font=("Helvetica", 10),
+            command=lambda: self.copy_to_clipboard(self.momo_info, btn_copy_momo)
+        )
+        btn_copy_momo.grid(row=1, column=2, padx=(5, 15), pady=8)
+        
+        # GitHub Sponsors / Web link
+        lbl_web_title = ctk.CTkLabel(details_frame, text="🌐 Dự án:", font=("Helvetica", 11, "bold"))
+        lbl_web_title.grid(row=2, column=0, sticky="w", padx=15, pady=8)
+        
+        lbl_web_val = ctk.CTkLabel(details_frame, text="github.com/Huy-Nhan/microproton", font=("Helvetica", 11))
+        lbl_web_val.grid(row=2, column=1, sticky="w", padx=5, pady=8)
+        
+        btn_open_web = ctk.CTkButton(
+            details_frame, 
+            text="Mở link", 
+            width=70, 
+            height=22, 
+            font=("Helvetica", 10),
+            command=self.open_github
+        )
+        btn_open_web.grid(row=2, column=2, padx=(5, 15), pady=8)
+        
+        # Close button
+        btn_close = ctk.CTkButton(
+            self, 
+            text="Đóng", 
+            fg_color="#3a3a3a", 
+            hover_color="#4a4a4a", 
+            width=100, 
+            command=self.destroy
+        )
+        btn_close.pack(pady=(0, 15))
+        
+    def copy_to_clipboard(self, text_to_copy, button_widget):
+        self.clipboard_clear()
+        parts = text_to_copy.split(":")
+        val = parts[-1].split("-")[0].strip() if "-" in parts[-1] else parts[-1].strip()
+        self.clipboard_append(val)
+        
+        # Show feedback on button
+        button_widget.configure(text="Đã chép!", fg_color="#2eb85c", hover_color="#229949")
+        self.after(1500, lambda: button_widget.configure(text="Sao chép", fg_color="#1f538d", hover_color="#14375e"))
+        
+    def open_github(self):
+        import webbrowser
+        webbrowser.open("https://github.com/ryando/microproton")
 
 if __name__ == "__main__":
     import socket
