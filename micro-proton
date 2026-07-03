@@ -294,6 +294,11 @@ def run_command(proton_path, prefix_dir, exe_path, action="run", mangohud=False,
     if not is_system_wine:
         env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = STEAM_PATH
         env["STEAM_COMPAT_DATA_PATH"] = prefix_dir
+        exe_hash = get_exe_hash(exe_path)
+        if exe_hash:
+            env["STEAM_COMPAT_APP_ID"] = str(int(exe_hash, 16) % 1000000)
+        else:
+            env["STEAM_COMPAT_APP_ID"] = "0"
     
     # Apply MangoHud
     if mangohud:
@@ -367,7 +372,10 @@ def run_command(proton_path, prefix_dir, exe_path, action="run", mangohud=False,
             with open(reg_file_path, "w") as f:
                 f.write("Windows Registry Editor Version 5.00\n\n")
                 f.write("[HKEY_CURRENT_USER\\Software\\Wine\\X11 Driver]\n")
-                f.write('"InputStyle"="none"\n')
+                if unikey:
+                    f.write('"InputStyle"="none"\n')
+                else:
+                    f.write('"InputStyle"="overthespot"\n')
             # Import settings (also initializes prefix)
             run_wine_sub(["regedit", reg_file_path])
         except Exception as e:

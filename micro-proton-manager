@@ -1791,6 +1791,20 @@ class AddAppDialog(ctk.CTkToplevel):
             proton=proton_val
         )
         
+        # Determine the WM_CLASS for proper window grouping
+        exe_basename = os.path.basename(exe).lower()
+        wm_class = exe_basename
+        
+        is_proton = True
+        if proton_val and "wine" in proton_val.lower():
+            is_proton = False
+        elif not proton_val and self.proton_versions:
+            if "wine" in self.proton_versions[0][0].lower():
+                is_proton = False
+                
+        if is_proton:
+            wm_class = f"steam_app_{int(exe_hash, 16) % 1000000}"
+            
         content = f"""[Desktop Entry]
 Name={name}
 Exec={exec_line}
@@ -1800,6 +1814,7 @@ Type=Application
 Categories=Game;Emulator;Utility;
 MimeType=application/x-ms-dos-executable;
 Comment=Chạy bằng MicroProton
+StartupWMClass={wm_class}
 X-MicroProton-Exe={exe}
 """
         try:
