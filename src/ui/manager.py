@@ -192,11 +192,150 @@ class AppManagerWindow:
                 break
         if indicator_script:
             subprocess.Popen([sys.executable, indicator_script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+        # Check first run optimization
+        self.root.after(1000, self.check_first_run_optimization)
         
     def deiconify_and_raise(self):
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
+
+    def check_first_run_optimization(self):
+        global_prefix_wine = os.path.join(ProtonUtils.PREFIXES_DIR, "global_default", "pfx")
+        if os.path.exists(global_prefix_wine):
+            return
+            
+        confirm = messagebox.askyesno(
+            "Tối ưu hóa Hệ thống",
+            "Chào mừng bạn đến với MicroProton!\n\n"
+            "Hệ thống phát hiện đây là lần chạy đầu tiên. Bạn có muốn tự động cấu hình và tối ưu hóa môi trường Windows mặc định (WINEPREFIX) không?\n\n"
+            "Quá trình này sẽ:\n"
+            "1. Thiết lập Font Smoothing (ClearType) giúp hiển thị chữ sắc nét.\n"
+            "2. Tắt hộp thoại báo lỗi crash phiền phức của Wine.\n"
+            "3. Tải và cài đặt tự động các gói quan trọng (Microsoft Fonts, Msxml6, Riched20, Visual C++ 2015).\n\n"
+            "Việc này giúp phần mềm văn phòng (Office 365, WPS Office) và game hoạt động mượt mà nhất. Bạn có muốn tiến hành không?",
+            parent=self.root
+        )
+        if not confirm:
+            return
+            
+        # Create and show progress window
+        progress_win = ctk.CTkToplevel(self.root)
+        progress_win.title("Đang tối ưu hóa môi trường")
+        progress_win.geometry("500x220")
+        progress_win.resizable(False, False)
+        progress_win.transient(self.root)
+        progress_win.grab_set()
+        
+        lbl_title = ctk.CTkLabel(progress_win, text="🔧 Đang thiết lập cấu hình tối ưu", font=("Helvetica", 14, "bold"))
+        lbl_title.pack(pady=(15, 10))
+        
+        lbl_status = ctk.CTkLabel(progress_win, text="Đang chuẩn bị...", font=("Helvetica", 12))
+        lbl_status.pack(pady=5)
+        
+        progress_bar = ctk.CTkProgressBar(progress_win, width=400)
+        progress_bar.pack(pady=10)
+        progress_bar.set(0)
+        
+        def run_optimization():
+            steps = [
+                ("Khởi tạo WINEPREFIX mặc định...", 0.1),
+                ("Thiết lập Font Smoothing và tối ưu Registry...", 0.3),
+                ("Đồng bộ bộ cài Winetricks...", 0.5),
+                ("Cài đặt Microsoft Core Fonts...", 0.7),
+                ("Cài đặt các component bổ trợ (Msxml6, Riched20)...", 0.85),
+                ("Cài đặt Visual C++ Runtime (vcrun2015)...", 0.95)
+            ]
+            
+            try:
+                # Find default proton
+                proton_versions = ProtonUtils.find_proton_versions()
+                if proton_versions:
+                    proton_name, proton_path = proton_versions[0]
+                else:
+                    proton_path = "wine"
+                
+                env = os.environ.copy()
+                global_prefix = os.path.join(ProtonUtils.PREFIXES_DIR, "global_default")
+                global_pfx = os.path.join(global_prefix, "pfx")
+                env["WINEPREFIX"] = global_pfx
+                
+                is_proton = "wine" not in os.path.basename(proton_path).lower()
+                
+                # Step 1: Init prefix
+                progress_win.after(0, lambda: (lbl_status.configure(text=steps[0][0]), progress_bar.set(steps[0][1])))
+                os.makedirs(global_prefix, exist_ok=True)
+                if is_proton:
+                    cmd = [proton_path, "run", "wineboot", "-u"]
+                else:
+                    cmd = [proton_path, "wineboot", "-u"]
+                subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                
+                # Step 2: Apply registry
+                progress_win.after(0, lambda: (lbl_status.configure(text=steps[1][0]), progress_bar.set(steps[1][1])))
+                reg_file = os.path.join(global_prefix, "optimize.reg")
+                with open(reg_file, "w") as f:
+                    f.write("Windows Registry Editor Version 5.00\n\n")
+                    f.write("[HKEY_CURRENT_USER\\Control Panel\\Desktop]\n")
+                    f.write('"FontSmoothing"="2"\n')
+                    f.write('"FontSmoothingType"=dword:00000002\n')
+                    f.write('"FontSmoothingWidth"=dword:00000000\n')
+                    f.write('"FontSmoothingOrientation"=dword:00000001\n\n')
+                    f.write("[HKEY_CURRENT_USER\\Software\\Wine\\WineDbg]\n")
+                    f.write('"ShowCrashDialog"=dword:00000000\n')
+                if is_proton:
+                    cmd = [proton_path, "run", "regedit", reg_file]
+                else:
+                    cmd = [proton_path, "regedit", reg_file]
+                subprocess.run(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                try:
+                    os.remove(reg_file)
+                except Exception:
+                    pass
+                    
+                # Step 3: Check/download Winetricks
+                progress_win.after(0, lambda: (lbl_status.configure(text=steps[2][0]), progress_bar.set(steps[2][1])))
+                winetricks_path = shutil.which("winetricks")
+                if not winetricks_path:
+                    local_winetricks = os.path.expanduser("~/.local/bin/winetricks")
+                    if not os.path.exists(local_winetricks):
+                        url = "https://raw.githubusercontent.com/Winetricks/winetricks/master/src/winetricks"
+                        os.makedirs(os.path.expanduser("~/.local/bin"), exist_ok=True)
+                        subprocess.run(["curl", "-sL", url, "-o", local_winetricks], check=True)
+                        os.chmod(local_winetricks, 0o755)
+                    winetricks_path = local_winetricks
+                    
+                # Winetricks env setup
+                w_env = env.copy()
+                w_env["NO_AT_BRIDGE"] = "1"
+                w_env["GTK_A11Y"] = "none"
+                if is_proton:
+                    proton_dir = os.path.dirname(proton_path)
+                    wine_path = os.path.join(proton_dir, "files/bin/wine")
+                    if os.path.exists(wine_path):
+                        w_env["WINE"] = wine_path
+                        w_env["WINEARCH"] = "win64"
+                else:
+                    w_env["WINE"] = proton_path
+                    
+                # Step 4: Install corefonts
+                progress_win.after(0, lambda: (lbl_status.configure(text=steps[3][0]), progress_bar.set(steps[3][1])))
+                subprocess.run([winetricks_path, "-q", "corefonts"], env=w_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                
+                # Step 5: Install msxml6 riched20
+                progress_win.after(0, lambda: (lbl_status.configure(text=steps[4][0]), progress_bar.set(steps[4][1])))
+                subprocess.run([winetricks_path, "-q", "msxml6", "riched20", "riched30"], env=w_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                
+                # Step 6: Install vcrun2015
+                progress_win.after(0, lambda: (lbl_status.configure(text=steps[5][0]), progress_bar.set(steps[5][1])))
+                subprocess.run([winetricks_path, "-q", "vcrun2015"], env=w_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                
+                progress_win.after(0, lambda: (progress_bar.set(1.0), progress_win.destroy(), messagebox.showinfo("Thành công", "Tối ưu hóa môi trường mặc định hoàn tất!", parent=self.root)))
+            except Exception as e:
+                progress_win.after(0, lambda: (progress_win.destroy(), messagebox.showerror("Lỗi", f"Lỗi tối ưu hóa hệ thống: {e}", parent=self.root)))
+                
+        threading.Thread(target=run_optimization, daemon=True).start()
 
     def build_left_panel(self):
         left_frame = ctk.CTkFrame(self.root, corner_radius=0)
@@ -230,7 +369,7 @@ class AppManagerWindow:
         
         btn_donate = ctk.CTkButton(
             header_buttons, 
-            text="☕ Ủng hộ", 
+            text="☕ Tài trợ", 
             font=("Helvetica", 11, "bold"), 
             fg_color="#2eb85c", 
             hover_color="#229949",
@@ -240,12 +379,12 @@ class AppManagerWindow:
         )
         btn_donate.pack(side=tk.LEFT)
         
-        lbl_subheader = ctk.CTkLabel(header_container, text="Quản lý & Tối ưu ứng dụng Windows", font=("Helvetica", 11), text_color="gray", anchor="w")
+        lbl_subheader = ctk.CTkLabel(header_container, text="Quản lý & Tối ưu môi trường Windows", font=("Helvetica", 11), text_color="gray", anchor="w")
         lbl_subheader.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
         
         btn_add = ctk.CTkButton(
             left_frame, 
-            text="+ Thêm ứng dụng", 
+            text="+ Đăng ký ứng dụng", 
             font=("Helvetica", 13, "bold"), 
             fg_color="#1f538d", 
             hover_color="#14375e",
@@ -253,12 +392,12 @@ class AppManagerWindow:
         )
         btn_add.grid(row=1, column=0, sticky="ew", padx=15, pady=10)
         
-        self.scroll_list = ctk.CTkScrollableFrame(left_frame, label_text="Ứng dụng đã cài đặt")
+        self.scroll_list = ctk.CTkScrollableFrame(left_frame, label_text="Danh sách Ứng dụng")
         self.scroll_list.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 10))
         
         btn_kill_all_sandboxes = ctk.CTkButton(
             left_frame, 
-            text="⏹️ Tắt toàn bộ Sandbox", 
+            text="⏹️ Terminate All Sandboxes", 
             font=("Helvetica", 12, "bold"), 
             fg_color="#e55353", 
             hover_color="#d93737",
@@ -273,7 +412,7 @@ class AppManagerWindow:
         
         btn_open_c_drive = ctk.CTkButton(
             bottom_btn_frame, 
-            text="📁 File Windows", 
+            text="📁 File Explorer", 
             font=("Helvetica", 11, "bold"), 
             fg_color="#2b2b2b", 
             hover_color="#3a3a3a",
@@ -284,7 +423,7 @@ class AppManagerWindow:
         
         btn_open_taskbar = ctk.CTkButton(
             bottom_btn_frame, 
-            text="🖥️ Màn hình Win", 
+            text="🖥️ Virtual Desktop", 
             font=("Helvetica", 11, "bold"), 
             fg_color="#2b2b2b", 
             hover_color="#3a3a3a",
@@ -295,7 +434,7 @@ class AppManagerWindow:
         
         btn_settings = ctk.CTkButton(
             bottom_btn_frame, 
-            text="⚙️ Thiết lập", 
+            text="⚙️ Cấu hình", 
             font=("Helvetica", 11, "bold"), 
             fg_color="#2b2b2b", 
             hover_color="#3a3a3a",
@@ -327,7 +466,7 @@ class AppManagerWindow:
         
         lbl_welcome_text = ctk.CTkLabel(
             self.welcome_frame, 
-            text="Chọn một ứng dụng từ danh sách bên trái\nhoặc nhấn nút '+ Thêm ứng dụng' để cấu hình & khởi chạy.",
+            text="Vui lòng lựa chọn ứng dụng từ danh sách bên trái\nhoặc nhấp chọn '+ Đăng ký ứng dụng' để cấu hình & thực thi.",
             font=("Helvetica", 14), 
             text_color="gray",
             justify="center"
@@ -341,18 +480,18 @@ class AppManagerWindow:
         self.header_frame = ctk.CTkFrame(self.details_frame, fg_color="transparent")
         self.header_frame.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
         
-        self.lbl_app_title = ctk.CTkLabel(self.header_frame, text="Tên ứng dụng", font=("Helvetica", 22, "bold"), anchor="w")
+        self.lbl_app_title = ctk.CTkLabel(self.header_frame, text="Tên định danh (App Name)", font=("Helvetica", 22, "bold"), anchor="w")
         self.lbl_app_title.pack(fill=tk.X)
         
-        self.lbl_app_status = ctk.CTkLabel(self.header_frame, text="Trạng thái: Đang dừng", font=("Helvetica", 12), text_color="gray", anchor="w")
+        self.lbl_app_status = ctk.CTkLabel(self.header_frame, text="Trạng thái: Idle", font=("Helvetica", 12), text_color="gray", anchor="w")
         self.lbl_app_status.pack(fill=tk.X, pady=(2, 0))
         
         self.tabview = ctk.CTkTabview(self.details_frame)
         self.tabview.grid(row=1, column=0, sticky="nsew", padx=15, pady=(0, 15))
         
-        self.tabview.add("Chạy & Công cụ")
-        self.tabview.add("Cấu hình hệ thống")
-        self.tabview.add("Chỉnh sửa thông tin")
+        self.tabview.add("Khởi chạy & Tiện ích")
+        self.tabview.add("Thiết lập Hệ thống")
+        self.tabview.add("Hiệu chỉnh Thông tin")
         
         self.build_tools_tab()
         self.build_config_tab()
@@ -360,7 +499,7 @@ class AppManagerWindow:
         
     def bind_hover_description(self, widget, description_text):
         widget.bind("<Enter>", lambda event, text=description_text: self.lbl_tool_desc.configure(text=text))
-        widget.bind("<Leave>", lambda event: self.lbl_tool_desc.configure(text="Di chuột qua các công cụ để xem chức năng chi tiết..."))
+        widget.bind("<Leave>", lambda event: self.lbl_tool_desc.configure(text="Di con trỏ chuột vào các chức năng để xem thông tin chi tiết..."))
 
     def bind_scroll_to_widget(self, scrollable_frame, widget):
         def on_scroll(event):
@@ -380,13 +519,13 @@ class AppManagerWindow:
             self.bind_scroll_to_widget(scrollable_frame, child)
 
     def build_tools_tab(self):
-        tab = self.tabview.tab("Chạy & Công cụ")
+        tab = self.tabview.tab("Khởi chạy & Tiện ích")
         tab.grid_columnconfigure((0, 1), weight=1)
         tab.grid_rowconfigure((0, 1, 2, 3, 4, 5), weight=1)
         
         self.btn_launch = ctk.CTkButton(
             tab, 
-            text="CHẠY ỨNG DỤNG", 
+            text="KHỞI CHẠY (LAUNCH)", 
             font=("Helvetica", 16, "bold"), 
             fg_color="#2eb85c", 
             hover_color="#229949",
@@ -395,33 +534,33 @@ class AppManagerWindow:
         )
         self.btn_launch.grid(row=0, column=0, columnspan=2, sticky="ew", padx=20, pady=(15, 10))
         
-        self.btn_winecfg = ctk.CTkButton(tab, text="Cấu hình Proton (winecfg)", height=38, command=self.run_winecfg)
+        self.btn_winecfg = ctk.CTkButton(tab, text="Cấu hình Wine (winecfg)", height=38, command=self.run_winecfg)
         self.btn_winecfg.grid(row=1, column=0, sticky="ew", padx=20, pady=6)
         
-        self.btn_winetricks = ctk.CTkButton(tab, text="Thư viện Winetricks (Proton)", height=38, command=self.run_winetricks)
+        self.btn_winetricks = ctk.CTkButton(tab, text="Quản lý Component (Winetricks)", height=38, command=self.run_winetricks)
         self.btn_winetricks.grid(row=1, column=1, sticky="ew", padx=20, pady=6)
         
-        self.btn_browse = ctk.CTkButton(tab, text="Mở ổ ảo C:", height=38, command=self.browse_c_drive)
+        self.btn_browse = ctk.CTkButton(tab, text="Mở thư mục Drive C", height=38, command=self.browse_c_drive)
         self.btn_browse.grid(row=2, column=0, sticky="ew", padx=20, pady=6)
         
-        self.btn_change_exe = ctk.CTkButton(tab, text="Đổi file chạy (.exe)", height=38, command=self.change_exe_target)
+        self.btn_change_exe = ctk.CTkButton(tab, text="Thay đổi Executable Path (.exe)", height=38, command=self.change_exe_target)
         self.btn_change_exe.grid(row=2, column=1, sticky="ew", padx=20, pady=6)
         
-        self.btn_backup = ctk.CTkButton(tab, text="Sao lưu Prefix", height=38, command=self.backup_prefix)
+        self.btn_backup = ctk.CTkButton(tab, text="Backup WINEPREFIX", height=38, command=self.backup_prefix)
         self.btn_backup.grid(row=3, column=0, sticky="ew", padx=20, pady=6)
         
-        self.btn_restore = ctk.CTkButton(tab, text="Khôi phục Prefix", height=38, command=self.restore_prefix)
+        self.btn_restore = ctk.CTkButton(tab, text="Restore WINEPREFIX", height=38, command=self.restore_prefix)
         self.btn_restore.grid(row=3, column=1, sticky="ew", padx=20, pady=6)
         
-        self.btn_kill = ctk.CTkButton(tab, text="Tắt hết tiến trình (Kill)", height=38, fg_color="#e55353", hover_color="#d93737", command=self.kill_app)
+        self.btn_kill = ctk.CTkButton(tab, text="Terminate All Processes", height=38, fg_color="#e55353", hover_color="#d93737", command=self.kill_app)
         self.btn_kill.grid(row=4, column=0, sticky="ew", padx=20, pady=6)
         
-        self.btn_delete = ctk.CTkButton(tab, text="Xóa ứng dụng", height=38, fg_color="#f9b115", hover_color="#e69d0d", command=self.delete_app)
+        self.btn_delete = ctk.CTkButton(tab, text="Gỡ bỏ Ứng dụng (Delete)", height=38, fg_color="#f9b115", hover_color="#e69d0d", command=self.delete_app)
         self.btn_delete.grid(row=4, column=1, sticky="ew", padx=20, pady=6)
         
         self.lbl_tool_desc = ctk.CTkLabel(
             tab, 
-            text="Di chuột qua các công cụ để xem chức năng chi tiết...", 
+            text="Di con trỏ chuột vào các chức năng để xem thông tin chi tiết...", 
             font=("Helvetica", 12, "italic"), 
             text_color="gray", 
             justify="center",
@@ -430,15 +569,15 @@ class AppManagerWindow:
         )
         self.lbl_tool_desc.grid(row=5, column=0, columnspan=2, sticky="ew", padx=20, pady=(10, 15))
         
-        self.bind_hover_description(self.btn_launch, "Khởi chạy trò chơi/ứng dụng Windows bằng phiên bản Proton đã chọn.")
-        self.bind_hover_description(self.btn_winecfg, "Mở bảng thiết lập hệ thống Wine/Proton (winecfg) để thay đổi phiên bản Windows giả lập, DLLs ghi đè, hiển thị đồ họa và âm thanh.")
-        self.bind_hover_description(self.btn_winetricks, "Cài đặt thêm các gói thư viện bổ sung (Fonts, DirectX, .NET, Visual C++ Redistributable...) vào ổ ảo.")
-        self.bind_hover_description(self.btn_browse, "Mở thư mục ổ C: ảo (drive_c) của ứng dụng này để sao chép file, cài mod hoặc chỉnh sửa tệp tin.")
-        self.bind_hover_description(self.btn_change_exe, "Chuyển hướng tệp chạy chính của ứng dụng này (Hữu ích khi bạn vừa chạy bộ cài setup.exe xong và muốn trỏ sang file game.exe thực tế).")
-        self.bind_hover_description(self.btn_backup, "Nén toàn bộ thư mục ổ ảo (Prefix) của ứng dụng này thành tệp tin .zip để lưu trữ hoặc chuyển sang máy khác.")
-        self.bind_hover_description(self.btn_restore, "Giải nén tệp tin .zip đã sao lưu trước đó để khôi phục lại toàn bộ trạng thái ổ ảo và dữ liệu trò chơi.")
-        self.bind_hover_description(self.btn_kill, "Buộc dừng ngay lập tức toàn bộ các tệp tin và tiến trình Windows đang chạy ngầm của ứng dụng này (Sửa lỗi treo game).")
-        self.bind_hover_description(self.btn_delete, "Gỡ bỏ lối tắt ứng dụng khỏi menu Fedora Linux và cung cấp tùy chọn xóa hoàn toàn thư mục ổ ảo để giải phóng dung lượng ổ cứng.")
+        self.bind_hover_description(self.btn_launch, "Khởi chạy ứng dụng Windows bằng môi trường Proton/Wine đã định cấu hình.")
+        self.bind_hover_description(self.btn_winecfg, "Mở giao diện cấu hình Wine (winecfg) để thiết lập Windows Version, DLL Overrides, Graphics và Audio.")
+        self.bind_hover_description(self.btn_winetricks, "Cài đặt các gói thư viện bổ sung (Microsoft Core Fonts, DirectX, .NET Framework, Visual C++ Redistributable...) vào WINEPREFIX.")
+        self.bind_hover_description(self.btn_browse, "Mở thư mục Drive C (drive_c) trong WINEPREFIX để quản lý dữ liệu, cài đặt MOD hoặc cấu hình tệp tin ứng dụng.")
+        self.bind_hover_description(self.btn_change_exe, "Thay đổi đường dẫn tệp thực thi chính (thường sử dụng sau khi hoàn tất chạy Installer để trỏ Shortcut đến file thực thi .exe của phần mềm).")
+        self.bind_hover_description(self.btn_backup, "Nén toàn bộ cấu trúc WINEPREFIX của ứng dụng thành file lưu trữ (.zip) phục vụ backup hoặc di chuyển dữ liệu.")
+        self.bind_hover_description(self.btn_restore, "Giải nén file sao lưu (.zip) để khôi phục trạng thái WINEPREFIX và toàn bộ dữ liệu ứng dụng về thời điểm backup.")
+        self.bind_hover_description(self.btn_kill, "Buộc chấm dứt (Terminate) toàn bộ tiến trình Windows đang thực thi ngầm trong WINEPREFIX hiện hành để khắc phục lỗi đóng băng (freeze).")
+        self.bind_hover_description(self.btn_delete, "Gỡ bỏ Shortcut File (.desktop) khỏi Desktop Environment và cung cấp tuỳ chọn xoá WINEPREFIX để giải phóng bộ nhớ lưu trữ.")
 
     def create_setting_card(self, parent, title, description):
         card = ctk.CTkFrame(parent, corner_radius=8, border_width=1, border_color=("#e0e0e0", "#2d2d2d"), fg_color=("#f8f8f8", "#1c1c1e"))
@@ -459,23 +598,23 @@ class AppManagerWindow:
         return card, control_frame
 
     def build_config_tab(self):
-        tab = self.tabview.tab("Cấu hình hệ thống")
+        tab = self.tabview.tab("Thiết lập Hệ thống")
         
-        container = ctk.CTkScrollableFrame(tab, fg_color="transparent", label_text="Tùy chỉnh hệ thống & Hiệu năng")
+        container = ctk.CTkScrollableFrame(tab, fg_color="transparent", label_text="Cấu hình Hệ thống & Tối ưu hoá")
         container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         card_proton, ctrl_proton = self.create_setting_card(
             container, 
-            "Phiên bản Proton sử dụng", 
-            "Chọn phiên bản Steam Proton hoặc Proton-GE tự cài đặt để khởi chạy ứng dụng"
+            "Phiên bản Proton/Wine Runtime", 
+            "Định cấu hình phiên bản Proton (Steam) hoặc Proton-GE (Custom) để thực thi ứng dụng."
         )
         self.opt_proton = ctk.CTkOptionMenu(ctrl_proton, values=["Mặc định (Mới nhất)"], width=200)
         self.opt_proton.pack(padx=5, pady=5)
         
         card_mango, ctrl_mango = self.create_setting_card(
             container, 
-            "Bật MangoHud FPS Counter", 
-            "Hiển thị thông số FPS, tài nguyên CPU/GPU và nhiệt độ phần cứng khi chạy game"
+            "Kích hoạt MangoHud Performance Overlay", 
+            "Hiển thị FPS, thông số phần cứng (CPU/GPU/RAM) và nhiệt độ hệ thống realtime."
         )
         self.var_mangohud = tk.BooleanVar()
         self.chk_mangohud = ctk.CTkSwitch(ctrl_mango, text="", variable=self.var_mangohud)
@@ -483,8 +622,8 @@ class AppManagerWindow:
         
         card_gamemode, ctrl_gamemode = self.create_setting_card(
             container, 
-            "Bật Feral GameMode", 
-            "Tự động tối ưu hóa tài nguyên phần cứng (CPU, GPU, RAM) để chơi game mượt mà hơn"
+            "Kích hoạt Feral GameMode", 
+            "Tối ưu hóa lập lịch CPU/GPU (Governor & Scheduler) để gia tăng hiệu năng thực thi."
         )
         self.var_gamemode = tk.BooleanVar()
         self.chk_gamemode = ctk.CTkSwitch(ctrl_gamemode, text="", variable=self.var_gamemode)
@@ -492,8 +631,8 @@ class AppManagerWindow:
         
         card_wined3d, ctrl_wined3d = self.create_setting_card(
             container, 
-            "Ép chạy OpenGL (Proton WineD3D)", 
-            "Tắt Vulkan/DXVK và chuyển sang OpenGL (Sử dụng khi game cũ bị lỗi đồ họa)"
+            "Bắt buộc OpenGL Renderer (WineD3D)", 
+            "Vô hiệu hóa Vulkan/DXVK và chuyển hướng đồ hoạ qua OpenGL API (khắc phục lỗi đồ hoạ game cũ)."
         )
         self.var_wined3d = tk.BooleanVar()
         self.chk_wined3d = ctk.CTkSwitch(ctrl_wined3d, text="", variable=self.var_wined3d)
@@ -501,8 +640,8 @@ class AppManagerWindow:
         
         card_vd, ctrl_vd = self.create_setting_card(
             container, 
-            "Màn hình ảo (Virtual Desktop)", 
-            "Khởi chạy ứng dụng trong cửa sổ ảo riêng để tránh lỗi hiển thị sai độ phân giải"
+            "Kích hoạt Virtual Desktop (Khung giả lập)", 
+            "Thực thi ứng dụng trong một Virtual Window cố định để ngăn ngừa xung đột độ phân giải Display."
         )
         self.var_vd = tk.BooleanVar()
         self.chk_vd = ctk.CTkSwitch(ctrl_vd, text="", variable=self.var_vd, command=self.toggle_vd_dropdown)
@@ -513,8 +652,8 @@ class AppManagerWindow:
         
         card_unikey, ctrl_unikey = self.create_setting_card(
             container,
-            "Bộ gõ tiếng Việt UniKey (Proton)",
-            "Chạy UniKey trực tiếp trong ổ ảo (Prefix) để gõ tiếng Việt Telex/VNI trong game Windows"
+            "Tích hợp Bộ gõ Tiếng Việt UniKey (Wine)",
+            "Thực thi tiến trình UniKeyNT.exe trong WINEPREFIX để hỗ trợ nhập liệu tiếng Việt Telex/VNI."
         )
         self.var_unikey = tk.BooleanVar()
         self.chk_unikey = ctk.CTkSwitch(ctrl_unikey, text="", variable=self.var_unikey, command=self.handle_unikey_toggle)
@@ -522,8 +661,8 @@ class AppManagerWindow:
         
         card_taskbar, ctrl_taskbar = self.create_setting_card(
             container,
-            "Mở màn hình Windows (Desktop)",
-            "Tự động chạy màn hình ảo Windows (explorer.exe) khi khởi động ứng dụng để thao tác trực tiếp"
+            "Kích hoạt Windows Explorer Shell",
+            "Tự động khởi chạy tiến trình explorer.exe để hiển thị Desktop GUI và thanh Taskbar trong môi trường ảo."
         )
         self.var_taskbar = tk.BooleanVar()
         self.chk_taskbar = ctk.CTkSwitch(ctrl_taskbar, text="", variable=self.var_taskbar)
@@ -531,7 +670,7 @@ class AppManagerWindow:
         
         self.btn_save_config = ctk.CTkButton(
             container, 
-            text="Lưu cấu hình hệ thống", 
+            text="Áp dụng Cấu hình", 
             font=("Helvetica", 14, "bold"), 
             fg_color="#3a82f6", 
             hover_color="#2563eb",
@@ -543,31 +682,31 @@ class AppManagerWindow:
         self.bind_scroll_to_widget(container, tab)
 
     def build_edit_tab(self):
-        tab = self.tabview.tab("Chỉnh sửa thông tin")
+        tab = self.tabview.tab("Hiệu chỉnh Thông tin")
         tab.grid_columnconfigure((0, 1), weight=1)
         
-        lbl_name = ctk.CTkLabel(tab, text="Tên hiển thị ứng dụng:", font=("Helvetica", 12, "bold"), anchor="w")
+        lbl_name = ctk.CTkLabel(tab, text="Tên hiển thị (Display Name):", font=("Helvetica", 12, "bold"), anchor="w")
         lbl_name.grid(row=0, column=0, sticky="w", padx=20, pady=(15, 2))
         
-        self.ent_name = ctk.CTkEntry(tab, placeholder_text="Tên ứng dụng")
+        self.ent_name = ctk.CTkEntry(tab, placeholder_text="Nhập tên ứng dụng...")
         self.ent_name.grid(row=1, column=0, columnspan=2, sticky="ew", padx=20, pady=(0, 10))
         
-        lbl_icon = ctk.CTkLabel(tab, text="Đường dẫn biểu tượng (Icon):", font=("Helvetica", 12, "bold"), anchor="w")
+        lbl_icon = ctk.CTkLabel(tab, text="Đường dẫn Biểu tượng (Icon):", font=("Helvetica", 12, "bold"), anchor="w")
         lbl_icon.grid(row=2, column=0, sticky="w", padx=20, pady=(10, 2))
         
-        self.ent_icon = ctk.CTkEntry(tab, placeholder_text="Đường dẫn file ảnh .png, .jpg hoặc Tên Icon")
+        self.ent_icon = ctk.CTkEntry(tab, placeholder_text="Đường dẫn hình ảnh PNG/SVG hoặc Tên Icon hệ thống")
         self.ent_icon.grid(row=3, column=0, sticky="ew", padx=(20, 5), pady=(0, 10))
         
         btn_browse_icon = ctk.CTkButton(tab, text="Chọn...", width=80, command=self.select_icon_edit)
         btn_browse_icon.grid(row=3, column=1, sticky="w", padx=(5, 20), pady=(0, 10))
         
-        lbl_exe_label = ctk.CTkLabel(tab, text="Đường dẫn tệp tin gốc (.exe):", font=("Helvetica", 11, "bold"), text_color="gray", anchor="w")
+        lbl_exe_label = ctk.CTkLabel(tab, text="Đường dẫn tệp gốc Executable (.exe):", font=("Helvetica", 11, "bold"), text_color="gray", anchor="w")
         lbl_exe_label.grid(row=4, column=0, sticky="w", padx=20, pady=(10, 2))
         
         self.lbl_exe_val = ctk.CTkLabel(tab, text="", font=("Helvetica", 11), text_color="gray", anchor="w", justify="left")
         self.lbl_exe_val.grid(row=5, column=0, columnspan=2, sticky="w", padx=25, pady=(0, 10))
         
-        lbl_prefix_label = ctk.CTkLabel(tab, text="Thư mục ổ ảo (Proton Prefix):", font=("Helvetica", 11, "bold"), text_color="gray", anchor="w")
+        lbl_prefix_label = ctk.CTkLabel(tab, text="Đường dẫn WINEPREFIX:", font=("Helvetica", 11, "bold"), text_color="gray", anchor="w")
         lbl_prefix_label.grid(row=6, column=0, sticky="w", padx=20, pady=(5, 2))
         
         self.lbl_prefix_val = ctk.CTkLabel(tab, text="", font=("Helvetica", 11), text_color="gray", anchor="w", justify="left")
@@ -575,7 +714,7 @@ class AppManagerWindow:
         
         self.btn_save_info = ctk.CTkButton(
             tab, 
-            text="Lưu thông tin hiển thị", 
+            text="Cập nhật Thông tin", 
             font=("Helvetica", 14, "bold"),
             fg_color="#3a82f6",
             hover_color="#2563eb",

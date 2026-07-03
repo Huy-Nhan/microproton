@@ -21,15 +21,15 @@ class SettingsDialog(ctk.CTkToplevel):
     def __init__(self, app_window):
         super().__init__(app_window.root)
         self.app_window = app_window
-        self.title("Thiết lập chung")
-        self.geometry("450x290")
+        self.title("System Settings")
+        self.geometry("450x370")
         self.resizable(False, False)
         
         # Focus/Grab
         self.transient(app_window.root)
         self.after(250, lambda: self.grab_set())
         
-        lbl_title = ctk.CTkLabel(self, text="⚙️ Thiết lập cấu hình chung", font=("Helvetica", 16, "bold"))
+        lbl_title = ctk.CTkLabel(self, text="⚙️ Cấu hình Hệ thống", font=("Helvetica", 16, "bold"))
         lbl_title.pack(pady=(15, 10))
         
         # Main settings frame
@@ -38,7 +38,7 @@ class SettingsDialog(ctk.CTkToplevel):
         settings_frame.grid_columnconfigure(1, weight=1)
         
         # Default Proton Selection
-        lbl_proton = ctk.CTkLabel(settings_frame, text="Proton mặc định:", font=("Helvetica", 12, "bold"))
+        lbl_proton = ctk.CTkLabel(settings_frame, text="Phiên bản Proton mặc định:", font=("Helvetica", 12, "bold"))
         lbl_proton.grid(row=0, column=0, sticky="w", padx=15, pady=(15, 5))
         
         self.proton_versions = ProtonUtils.find_proton_versions()
@@ -60,23 +60,63 @@ class SettingsDialog(ctk.CTkToplevel):
         self.var_symlink.set(settings.get("map_home_symlink", False))
         self.chk_symlink = ctk.CTkCheckBox(
             settings_frame, 
-            text="Tạo liên kết ổ C: ra thư mục cá nhân (~/micro-proton-c)", 
+            text="Tạo Symlink thư mục Drive C ra thư mục cá nhân (~/micro-proton-c)", 
             variable=self.var_symlink,
             font=("Helvetica", 12)
         )
         self.chk_symlink.grid(row=1, column=0, columnspan=2, sticky="w", padx=15, pady=(10, 5))
+        
+        # Copy global prefix as template for new sandboxes
+        self.var_copy_template = tk.BooleanVar()
+        self.var_copy_template.set(settings.get("use_global_as_template", True))
+        self.chk_copy_template = ctk.CTkCheckBox(
+            settings_frame,
+            text="Sao chép Winecfg/Winetricks mặc định cho Sandbox mới",
+            variable=self.var_copy_template,
+            font=("Helvetica", 12)
+        )
+        self.chk_copy_template.grid(row=2, column=0, columnspan=2, sticky="w", padx=15, pady=(10, 5))
+            
+        # default template tools buttons
+        lbl_tools = ctk.CTkLabel(settings_frame, text="Cấu hình mặc định (global_default):", font=("Helvetica", 12, "bold"))
+        lbl_tools.grid(row=3, column=0, sticky="w", padx=15, pady=(10, 5))
+        
+        tools_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
+        tools_frame.grid(row=3, column=1, sticky="w", padx=15, pady=(10, 5))
+        
+        btn_winecfg = ctk.CTkButton(
+            tools_frame,
+            text="Winecfg",
+            width=90,
+            height=28,
+            fg_color="#1f538d",
+            hover_color="#14375e",
+            command=self.run_default_winecfg
+        )
+        btn_winecfg.pack(side=tk.LEFT, padx=(0, 5))
+        
+        btn_winetricks = ctk.CTkButton(
+            tools_frame,
+            text="Winetricks",
+            width=90,
+            height=28,
+            fg_color="#1f538d",
+            hover_color="#14375e",
+            command=self.run_default_winetricks
+        )
+        btn_winetricks.pack(side=tk.LEFT)
             
         # Download Proton button inside the settings frame
         btn_download = ctk.CTkButton(
             settings_frame, 
-            text="📥 Tải thêm phiên bản Proton-GE", 
+            text="📥 Download / Quản lý phiên bản Proton-GE", 
             font=("Helvetica", 12),
             fg_color="#2b2b2b",
             hover_color="#3a3a3a",
             height=32,
             command=self.trigger_download
         )
-        btn_download.grid(row=2, column=0, columnspan=2, sticky="ew", padx=15, pady=(15, 10))
+        btn_download.grid(row=4, column=0, columnspan=2, sticky="ew", padx=15, pady=(15, 10))
         
         # Action buttons
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -84,7 +124,7 @@ class SettingsDialog(ctk.CTkToplevel):
         
         btn_save = ctk.CTkButton(
             btn_frame, 
-            text="Lưu thiết lập", 
+            text="Lưu cấu hình", 
             fg_color="#2eb85c", 
             hover_color="#229949",
             width=150, 
@@ -113,7 +153,8 @@ class SettingsDialog(ctk.CTkToplevel):
         # Save settings
         SettingsManager.save_settings({
             "default_proton": selected_proton,
-            "map_home_symlink": enable_symlink
+            "map_home_symlink": enable_symlink,
+            "use_global_as_template": self.var_copy_template.get()
         })
         
         # Handle symlink creation/removal
@@ -125,23 +166,105 @@ class SettingsDialog(ctk.CTkToplevel):
                 try:
                     os.symlink(target_dir, link_path)
                 except Exception as e:
-                    messagebox.showerror("Lỗi", f"Không thể tạo liên kết ổ C: {e}", parent=self)
+                    messagebox.showerror("Lỗi", f"Không thể tạo Symlink Drive C: {e}", parent=self)
         else:
             if os.path.islink(link_path):
                 try:
                     os.remove(link_path)
                 except Exception as e:
-                    messagebox.showerror("Lỗi", f"Không thể xóa liên kết ổ C: {e}", parent=self)
+                    messagebox.showerror("Lỗi", f"Không thể xoá Symlink Drive C: {e}", parent=self)
                     
-        messagebox.showinfo("Thành công", "Đã lưu thiết lập thành công.", parent=self)
+        messagebox.showinfo("Thành công", "Đã cập nhật cấu hình hệ thống thành công.", parent=self)
         self.destroy()
+
+    def run_default_winecfg(self):
+        # Determine proton path to use
+        selected_proton = self.opt_default_proton.get()
+        proton_val = ""
+        for name, path in self.proton_versions:
+            if name == selected_proton:
+                proton_val = name
+                break
+        
+        global_prefix = os.path.join(ProtonUtils.PREFIXES_DIR, "global_default")
+        cmd = [MICRO_PROTON_BIN, "--prefix", global_prefix]
+        if proton_val:
+            cmd.extend(["--proton", proton_val])
+        cmd.append("--winecfg")
+        
+        try:
+            subprocess.Popen(cmd)
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Không thể chạy winecfg: {e}", parent=self)
+
+    def run_default_winetricks(self):
+        winetricks_path = shutil.which("winetricks")
+        if not winetricks_path:
+            local_winetricks = os.path.expanduser("~/.local/bin/winetricks")
+            if not os.path.exists(local_winetricks):
+                confirm = messagebox.askyesno(
+                    "Tải Winetricks",
+                    "Không tìm thấy Winetricks trên hệ thống. Bạn có muốn tự động tải về thư mục cá nhân (~/.local/bin/winetricks) không?",
+                    parent=self
+                )
+                if not confirm:
+                    return
+                
+                def do_download():
+                    try:
+                        url = "https://raw.githubusercontent.com/Winetricks/winetricks/master/src/winetricks"
+                        local_bin = os.path.expanduser("~/.local/bin")
+                        os.makedirs(local_bin, exist_ok=True)
+                        subprocess.run(["curl", "-sL", url, "-o", local_winetricks], check=True)
+                        os.chmod(local_winetricks, 0o755)
+                        self.after(0, lambda: messagebox.showinfo("Thành công", "Đã tải xong Winetricks. Hãy nhấn lại nút để khởi chạy.", parent=self))
+                    except Exception as e:
+                        self.after(0, lambda: messagebox.showerror("Lỗi", f"Lỗi tải Winetricks: {e}", parent=self))
+                
+                threading.Thread(target=do_download, daemon=True).start()
+                messagebox.showinfo("Đang tải", "Đang tải Winetricks về máy tính. Vui lòng đợi thông báo hoàn thành.", parent=self)
+                return
+            else:
+                winetricks_path = local_winetricks
+                
+        env = os.environ.copy()
+        global_prefix = os.path.join(ProtonUtils.PREFIXES_DIR, "global_default")
+        env["WINEPREFIX"] = os.path.join(global_prefix, "pfx")
+        env["NO_AT_BRIDGE"] = "1"
+        env["GTK_A11Y"] = "none"
+        
+        # Determine Wine binary path based on selected default Proton
+        selected_proton = self.opt_default_proton.get()
+        proton_path = None
+        for name, path in self.proton_versions:
+            if name == selected_proton or selected_proton in name:
+                proton_path = path
+                break
+        if not proton_path and self.proton_versions:
+            proton_path = self.proton_versions[0][1]
+            
+        if proton_path:
+            is_system_wine = "wine" in os.path.basename(proton_path).lower()
+            if is_system_wine:
+                env["WINE"] = proton_path
+            else:
+                proton_dir = os.path.dirname(proton_path)
+                wine_path = os.path.join(proton_dir, "files/bin/wine")
+                if os.path.exists(wine_path):
+                    env["WINE"] = wine_path
+                    env["WINEARCH"] = "win64"
+                
+        try:
+            subprocess.Popen([winetricks_path], env=env)
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Không thể khởi chạy Winetricks: {e}", parent=self)
 
 class AddAppDialog(ctk.CTkToplevel):
     def __init__(self, app_window, callback):
         super().__init__(app_window.root)
         self.app_window = app_window
         self.callback = callback
-        self.title("Thêm ứng dụng mới")
+        self.title("Đăng ký Ứng dụng")
         self.geometry("520x460")
         
         self.after(250, lambda: self.grab_set())
@@ -153,43 +276,43 @@ class AddAppDialog(ctk.CTkToplevel):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(8, weight=1)
         
-        lbl_title = ctk.CTkLabel(self, text="Thêm ứng dụng Windows mới", font=("Helvetica", 16, "bold"))
+        lbl_title = ctk.CTkLabel(self, text="Đăng ký Ứng dụng Windows mới", font=("Helvetica", 16, "bold"))
         lbl_title.grid(row=0, column=0, columnspan=3, pady=(20, 15), padx=20, sticky="w")
         
         # EXE Type Option (Install new vs Import existing)
-        lbl_type = ctk.CTkLabel(self, text="Mục đích:", font=("Helvetica", 12, "bold"))
+        lbl_type = ctk.CTkLabel(self, text="Phương thức:", font=("Helvetica", 12, "bold"))
         lbl_type.grid(row=1, column=0, sticky="w", padx=20, pady=5)
         
         self.var_exe_type = tk.StringVar(value="install") # "install" or "import"
         
-        rdo_install = ctk.CTkRadioButton(self, text="Cài đặt mới (tệp từ Fedora)", variable=self.var_exe_type, value="install", font=("Helvetica", 12), command=self.toggle_sandbox_switch)
+        rdo_install = ctk.CTkRadioButton(self, text="Chạy trình cài đặt (Setup/Installer)", variable=self.var_exe_type, value="install", font=("Helvetica", 12), command=self.toggle_sandbox_switch)
         rdo_install.grid(row=1, column=1, sticky="w", padx=5, pady=5)
         
-        rdo_import = ctk.CTkRadioButton(self, text="Đã cài (nhập từ ổ C: ảo)", variable=self.var_exe_type, value="import", font=("Helvetica", 12), command=self.toggle_sandbox_switch)
+        rdo_import = ctk.CTkRadioButton(self, text="Import file thực thi (.exe)", variable=self.var_exe_type, value="import", font=("Helvetica", 12), command=self.toggle_sandbox_switch)
         rdo_import.grid(row=1, column=2, sticky="w", padx=5, pady=5)
         
         # EXE Selection
-        lbl_exe = ctk.CTkLabel(self, text="Tệp tin (.exe):", font=("Helvetica", 12, "bold"))
+        lbl_exe = ctk.CTkLabel(self, text="Đường dẫn Executable (.exe):", font=("Helvetica", 12, "bold"))
         lbl_exe.grid(row=2, column=0, sticky="w", padx=20, pady=5)
         
-        self.ent_exe = ctk.CTkEntry(self, placeholder_text="Đường dẫn đến file .exe")
+        self.ent_exe = ctk.CTkEntry(self, placeholder_text="Chọn đường dẫn file .exe thực thi...")
         self.ent_exe.grid(row=2, column=1, sticky="ew", padx=5, pady=5)
         
         btn_browse_exe = ctk.CTkButton(self, text="Chọn...", width=80, command=self.select_exe)
         btn_browse_exe.grid(row=2, column=2, padx=(5, 20), pady=5)
         
         # Display Name
-        lbl_name = ctk.CTkLabel(self, text="Tên ứng dụng:", font=("Helvetica", 12, "bold"))
+        lbl_name = ctk.CTkLabel(self, text="Tên định danh (App Name):", font=("Helvetica", 12, "bold"))
         lbl_name.grid(row=3, column=0, sticky="w", padx=20, pady=5)
         
-        self.ent_name = ctk.CTkEntry(self, placeholder_text="Tên hiển thị trong Menu")
+        self.ent_name = ctk.CTkEntry(self, placeholder_text="Tên hiển thị trên App Menu")
         self.ent_name.grid(row=3, column=1, columnspan=2, sticky="ew", padx=(5, 20), pady=5)
         
         # Icon Selection
-        lbl_icon = ctk.CTkLabel(self, text="Biểu tượng (Icon):", font=("Helvetica", 12, "bold"))
+        lbl_icon = ctk.CTkLabel(self, text="Đường dẫn Biểu tượng (Icon):", font=("Helvetica", 12, "bold"))
         lbl_icon.grid(row=4, column=0, sticky="w", padx=20, pady=5)
         
-        self.ent_icon = ctk.CTkEntry(self, placeholder_text="Đường dẫn file ảnh hoặc tên icon")
+        self.ent_icon = ctk.CTkEntry(self, placeholder_text="Đường dẫn file PNG/SVG hoặc Tên Icon hệ thống")
         self.ent_icon.insert(0, self.icon_path)
         self.ent_icon.grid(row=4, column=1, sticky="ew", padx=5, pady=5)
         
@@ -197,7 +320,7 @@ class AddAppDialog(ctk.CTkToplevel):
         btn_browse_icon.grid(row=4, column=2, padx=(5, 20), pady=5)
         
         # Proton Selection
-        lbl_proto = ctk.CTkLabel(self, text="Phiên bản Proton:", font=("Helvetica", 12, "bold"))
+        lbl_proto = ctk.CTkLabel(self, text="Phiên bản Proton/Wine:", font=("Helvetica", 12, "bold"))
         lbl_proto.grid(row=5, column=0, sticky="w", padx=20, pady=5)
         
         proto_names = ["Mặc định (Mới nhất)"] + [p[0] for p in self.proton_versions]
@@ -219,13 +342,13 @@ class AddAppDialog(ctk.CTkToplevel):
             self.opt_proto.set("Mặc định (Mới nhất)")
 
         # Sandbox Option
-        lbl_sandbox = ctk.CTkLabel(self, text="Hộp cát (Sandbox):", font=("Helvetica", 12, "bold"))
+        lbl_sandbox = ctk.CTkLabel(self, text="Cấu hình Sandbox:", font=("Helvetica", 12, "bold"))
         lbl_sandbox.grid(row=6, column=0, sticky="w", padx=20, pady=5)
         
         self.var_sandbox = tk.BooleanVar(value=False)
         self.chk_sandbox = ctk.CTkSwitch(
             self, 
-            text="Ổ C: ảo riêng biệt cho ứng dụng này", 
+            text="Kích hoạt Sandbox độc lập (WINEPREFIX riêng)", 
             variable=self.var_sandbox,
             font=("Helvetica", 12)
         )
@@ -235,18 +358,62 @@ class AddAppDialog(ctk.CTkToplevel):
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.grid(row=8, column=0, columnspan=3, pady=(20, 15), padx=20, sticky="ew")
         
-        btn_cancel = ctk.CTkButton(btn_frame, text="Hủy bỏ", fg_color="gray", hover_color="#555", command=self.destroy)
+        btn_cancel = ctk.CTkButton(btn_frame, text="Hủy", fg_color="gray", hover_color="#555", command=self.destroy)
         btn_cancel.pack(side=tk.LEFT, padx=10, expand=True, fill=tk.X)
         
-        btn_add = ctk.CTkButton(btn_frame, text="Thêm ứng dụng", fg_color="#2eb85c", hover_color="#229949", command=self.save_app)
+        btn_add = ctk.CTkButton(btn_frame, text="Xác nhận Đăng ký", fg_color="#2eb85c", hover_color="#229949", command=self.save_app)
         btn_add.pack(side=tk.RIGHT, padx=10, expand=True, fill=tk.X)
 
     def toggle_sandbox_switch(self):
-        if self.var_exe_type.get() == "install":
-            self.chk_sandbox.configure(state="normal")
+        # Sandbox is always available for both installation and import modes
+        self.chk_sandbox.configure(state="normal")
+
+    def deploy_to_sandbox(self, exe_path, app_name, prefix_dir):
+        """
+        Copies the exe or its parent folder to the sandbox drive_c/Program Files/<app_name>
+        Returns the new exe path inside the sandbox.
+        """
+        import shutil
+        dest_app_dir = os.path.join(prefix_dir, "pfx/drive_c/Program Files", app_name)
+        
+        # If the file is already inside the prefix directory, do not copy
+        if os.path.abspath(prefix_dir) in os.path.abspath(exe_path):
+            return exe_path
+            
+        os.makedirs(os.path.dirname(dest_app_dir), exist_ok=True)
+        
+        src_dir = os.path.dirname(exe_path)
+        exe_name = os.path.basename(exe_path)
+        
+        # List of directories we shouldn't copy entirely
+        user_home = os.path.expanduser("~")
+        common_dirs = [
+            user_home,
+            os.path.join(user_home, "Downloads"),
+            os.path.join(user_home, "Desktop"),
+            os.path.join(user_home, "Documents"),
+            "/tmp"
+        ]
+        common_dirs = [os.path.abspath(d) for d in common_dirs]
+        src_dir_abs = os.path.abspath(src_dir)
+        
+        if src_dir_abs in common_dirs:
+            # Copy only the single exe file
+            os.makedirs(dest_app_dir, exist_ok=True)
+            dest_exe_path = os.path.join(dest_app_dir, exe_name)
+            shutil.copy2(exe_path, dest_exe_path)
         else:
-            self.chk_sandbox.configure(state="disabled")
-            self.var_sandbox.set(False)
+            # Copy the entire directory containing the exe
+            if os.path.exists(dest_app_dir):
+                try:
+                    shutil.rmtree(dest_app_dir)
+                except Exception:
+                    pass
+            shutil.copytree(src_dir, dest_app_dir)
+            dest_exe_path = os.path.join(dest_app_dir, exe_name)
+            
+        return dest_exe_path
+
 
     def select_exe(self):
         init_dir = os.path.expanduser("~")
@@ -284,11 +451,11 @@ class AddAppDialog(ctk.CTkToplevel):
             proton_val = proton_sel
             
         if not name or not exe:
-            messagebox.showerror("Lỗi", "Tên ứng dụng và đường dẫn .exe không được để trống!", parent=self)
+            messagebox.showerror("Lỗi", "Tên ứng dụng và đường dẫn Executable (.exe) không được bỏ trống!", parent=self)
             return
             
         if not os.path.exists(exe):
-            messagebox.showerror("Lỗi", "Tệp tin .exe không tồn tại tại đường dẫn đã chọn!", parent=self)
+            messagebox.showerror("Lỗi", "Không tìm thấy tệp tin thực thi (.exe) tại đường dẫn đã cấu hình!", parent=self)
             return
             
         exe_hash = ProtonUtils.get_exe_hash(exe)
@@ -315,16 +482,16 @@ class AddAppDialog(ctk.CTkToplevel):
                     subprocess.run(run_cmd)
                     root_win.after(500, self.callback)
                 except Exception as e:
-                    root_win.after(0, lambda: messagebox.showerror("Lỗi", f"Không thể chạy trình cài đặt: {e}", parent=root_win))
+                    root_win.after(0, lambda: messagebox.showerror("Lỗi", f"Không thể khởi chạy trình cài đặt: {e}", parent=root_win))
                     
             # Launch thread
             threading.Thread(target=run_installer_worker, daemon=True).start()
             
             messagebox.showinfo(
-                "Đang chạy bộ cài đặt",
-                "Trình cài đặt phần mềm đang được khởi chạy.\n\n"
-                "Hãy thực hiện quá trình cài đặt phần mềm của bạn. "
-                "Sau khi cài đặt xong, bạn đóng trình cài đặt lại, hệ thống sẽ tự động quét, cấu hình và thêm phím tắt vào danh sách cho bạn.",
+                "Đang khởi chạy Installer",
+                "Tiến trình cài đặt đang được thực thi.\n\n"
+                "Vui lòng hoàn tất quá trình cài đặt phần mềm. "
+                "Sau khi Installer đóng, hệ thống sẽ tự động quét thư mục WINEPREFIX để cấu hình và khởi tạo Shortcut.",
                 parent=self
             )
             self.destroy()
@@ -332,7 +499,19 @@ class AddAppDialog(ctk.CTkToplevel):
             
         else:
             # For import type: we write the .desktop file immediately
-            prefix_dir = ProtonUtils.get_prefix_dir(None)
+            sandbox_val = self.var_sandbox.get()
+            prefix_dir = ProtonUtils.get_prefix_dir(exe) if sandbox_val else ProtonUtils.get_prefix_dir(None)
+            
+            # If sandbox is enabled, copy the app to the sandbox
+            if sandbox_val:
+                try:
+                    exe = self.deploy_to_sandbox(exe, name, prefix_dir)
+                    # Recalculate hash based on the new exe path
+                    exe_hash = ProtonUtils.get_exe_hash(exe)
+                except Exception as e:
+                    messagebox.showerror("Lỗi", f"Lỗi deploy ứng dụng vào Sandbox: {e}", parent=self)
+                    return
+            
             desktop_filename = f"micro-proton-app-{exe_hash}.desktop"
             desktop_path = os.path.join(ProtonUtils.APPLICATIONS_DIR, desktop_filename)
             
@@ -385,16 +564,16 @@ X-MicroProton-Exe={exe}
                 subprocess.run(["update-desktop-database", ProtonUtils.APPLICATIONS_DIR])
                 self.callback()
                 self.destroy()
-                messagebox.showinfo("Thành công", f"Đã nhập ứng dụng '{name}' thành công!", parent=self.app_window.root)
+                messagebox.showinfo("Thành công", f"Đăng ký ứng dụng '{name}' thành công!", parent=self.app_window.root)
             except Exception as e:
-                messagebox.showerror("Lỗi", f"Không thể lưu ứng dụng: {e}", parent=self)
+                messagebox.showerror("Lỗi", f"Lỗi ghi cấu hình ứng dụng: {e}", parent=self)
 
 class ProtonDownloaderDialog(ctk.CTkToplevel):
     def __init__(self, parent_win, callback):
         super().__init__(parent_win.root)
         self.app_window = parent_win
         self.callback = callback
-        self.title("Tải & Quản lý Proton-GE")
+        self.title("Quản lý & Tải Proton-GE")
         self.geometry("600x520")
         self.resizable(False, False)
         
@@ -403,7 +582,7 @@ class ProtonDownloaderDialog(ctk.CTkToplevel):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
         
-        lbl_title = ctk.CTkLabel(self, text="Bộ quản lý & Tải Proton-GE", font=("Helvetica", 18, "bold"))
+        lbl_title = ctk.CTkLabel(self, text="Quản lý & Tải phiên bản Proton-GE", font=("Helvetica", 18, "bold"))
         lbl_title.grid(row=0, column=0, sticky="w", padx=20, pady=(15, 2))
         
         self.scroll_container = ctk.CTkScrollableFrame(self, fg_color="transparent")
@@ -421,12 +600,12 @@ class ProtonDownloaderDialog(ctk.CTkToplevel):
         for w in self.scroll_container.winfo_children():
             w.destroy()
             
-        lbl_inst = ctk.CTkLabel(self.scroll_container, text="Các phiên bản đang cài trên máy:", font=("Helvetica", 13, "bold"), anchor="w")
+        lbl_inst = ctk.CTkLabel(self.scroll_container, text="Các phiên bản đã cài đặt trên hệ thống:", font=("Helvetica", 13, "bold"), anchor="w")
         lbl_inst.pack(fill=tk.X, padx=10, pady=(10, 5))
         
         installed_versions = ProtonUtils.find_proton_versions()
         if not installed_versions:
-            lbl_no_inst = ctk.CTkLabel(self.scroll_container, text="Chưa phát hiện phiên bản Proton nào.", text_color="gray", anchor="w")
+            lbl_no_inst = ctk.CTkLabel(self.scroll_container, text="Không phát hiện phiên bản Proton nào.", text_color="gray", anchor="w")
             lbl_no_inst.pack(fill=tk.X, padx=20, pady=5)
         else:
             for name, path in installed_versions:
@@ -442,7 +621,7 @@ class ProtonDownloaderDialog(ctk.CTkToplevel):
                 if is_custom:
                     btn_del = ctk.CTkButton(
                         row, 
-                        text="Xóa", 
+                        text="Gỡ bỏ", 
                         width=50, 
                         height=22, 
                         fg_color="#e55353", 
@@ -454,10 +633,10 @@ class ProtonDownloaderDialog(ctk.CTkToplevel):
         divider = ctk.CTkFrame(self.scroll_container, height=2, fg_color=("#e0e0e0", "#2d2d2d"))
         divider.pack(fill=tk.X, padx=10, pady=15)
         
-        lbl_online = ctk.CTkLabel(self.scroll_container, text="Tải phiên bản Proton-GE từ GitHub:", font=("Helvetica", 13, "bold"), anchor="w")
+        lbl_online = ctk.CTkLabel(self.scroll_container, text="Tải bản build Proton-GE mới từ GitHub:", font=("Helvetica", 13, "bold"), anchor="w")
         lbl_online.pack(fill=tk.X, padx=10, pady=(0, 5))
         
-        self.lbl_status = ctk.CTkLabel(self.scroll_container, text="Đang tải danh sách từ GitHub...", font=("Helvetica", 11), text_color="gray", anchor="w")
+        self.lbl_status = ctk.CTkLabel(self.scroll_container, text="Đang kết nối API GitHub để tải danh sách bản phát hành...", font=("Helvetica", 11), text_color="gray", anchor="w")
         self.lbl_status.pack(fill=tk.X, padx=15, pady=5)
         
         self.progress_frame = ctk.CTkFrame(self.scroll_container, fg_color="transparent")
@@ -474,8 +653,8 @@ class ProtonDownloaderDialog(ctk.CTkToplevel):
 
     def delete_proton_version(self, name, path):
         confirm = messagebox.askyesno(
-            "Xác nhận xóa",
-            f"Bạn có chắc chắn muốn xóa phiên bản Proton tùy chỉnh '{name}' để giải phóng dung lượng không?",
+            "Xác nhận gỡ bỏ",
+            f"Bạn có chắc chắn muốn gỡ bỏ phiên bản Proton tùy chỉnh '{name}' để giải phóng dung lượng đĩa?",
             parent=self
         )
         if not confirm:
@@ -485,13 +664,13 @@ class ProtonDownloaderDialog(ctk.CTkToplevel):
             version_dir = os.path.dirname(path)
             if os.path.exists(version_dir):
                 shutil.rmtree(version_dir)
-                messagebox.showinfo("Thành công", f"Đã gỡ bỏ phiên bản Proton '{name}' thành công.", parent=self)
+                messagebox.showinfo("Thành công", f"Gỡ bỏ phiên bản Proton '{name}' thành công.", parent=self)
                 self.callback()
                 self.refresh_ui()
             else:
-                messagebox.showerror("Lỗi", "Thư mục không tồn tại.", parent=self)
+                messagebox.showerror("Lỗi", "Không tìm thấy thư mục cài đặt tương ứng.", parent=self)
         except Exception as e:
-            messagebox.showerror("Lỗi", f"Không thể xóa thư mục: {e}", parent=self)
+            messagebox.showerror("Lỗi", f"Lỗi xoá thư mục cài đặt: {e}", parent=self)
 
     def fetch_releases(self):
         try:
@@ -526,7 +705,7 @@ class ProtonDownloaderDialog(ctk.CTkToplevel):
             
             self.after(0, lambda: self.display_releases(valid_releases))
         except Exception as e:
-            self.after(0, lambda: self.show_error(f"Lỗi tải danh sách: {e}"))
+            self.after(0, lambda: self.show_error(f"Lỗi đồng bộ danh sách: {e}"))
 
     def display_releases(self, releases):
         if self.lbl_status and self.lbl_status.winfo_exists():
@@ -536,7 +715,7 @@ class ProtonDownloaderDialog(ctk.CTkToplevel):
             widget.destroy()
             
         if not releases:
-            lbl_empty = ctk.CTkLabel(self.releases_frame, text="Không tìm thấy phiên bản khả dụng.", text_color="gray")
+            lbl_empty = ctk.CTkLabel(self.releases_frame, text="Không phát hiện bản phát hành khả dụng.", text_color="gray")
             lbl_empty.pack(pady=10)
             return
             
@@ -557,12 +736,12 @@ class ProtonDownloaderDialog(ctk.CTkToplevel):
             
             installed_path = os.path.join(compat_dir, r["tag"])
             if os.path.exists(installed_path):
-                lbl_installed = ctk.CTkLabel(row, text="Đã cài đặt", text_color="#2eb85c", font=("Helvetica", 11, "bold"))
+                lbl_installed = ctk.CTkLabel(row, text="Đã cài đặt (Installed)", text_color="#2eb85c", font=("Helvetica", 11, "bold"))
                 lbl_installed.pack(side=tk.RIGHT, padx=15)
             else:
                 btn_dl = ctk.CTkButton(
                     row, 
-                    text="Tải về", 
+                    text="Download", 
                     width=75, 
                     height=24,
                     fg_color="#1f538d", 
@@ -575,7 +754,7 @@ class ProtonDownloaderDialog(ctk.CTkToplevel):
         self.releases_frame.pack_forget()
         self.progress_frame.pack(fill=tk.X, padx=10, pady=10)
         self.progress_bar.set(0)
-        self.progress_label.configure(text=f"Đang tải {release['tag']}...")
+        self.progress_label.configure(text=f"Đang tải xuống {release['tag']}...")
         
         threading.Thread(target=self.download_and_extract_thread, args=(release,), daemon=True).start()
 
@@ -601,13 +780,9 @@ class ProtonDownloaderDialog(ctk.CTkToplevel):
                         downloaded += len(buffer)
                         out_file.write(buffer)
                         
-                        percent = downloaded / total_size
-                        mb_downloaded = downloaded / (1024 * 1024)
-                        total_mb = total_size / (1024 * 1024)
-                        
-                        self.after(0, lambda p=percent, m_dl=mb_downloaded, m_tot=total_mb: self.update_progress(p, f"Đang tải: {m_dl:.1f} MB / {m_tot:.1f} MB ({int(p*100)}%)"))
+                        self.after(0, lambda p=percent, m_dl=mb_downloaded, m_tot=total_mb: self.update_progress(p, f"Downloading: {m_dl:.1f} MB / {m_tot:.1f} MB ({int(p*100)}%)"))
             
-            self.after(0, lambda: self.update_progress(1.0, "Đang giải nén tệp tin (TarGz)... Vui lòng đợi!"))
+            self.after(0, lambda: self.update_progress(1.0, "Đang giải nén bộ lưu trữ (tar.gz)... Vui lòng đợi!"))
             
             with tarfile.open(dest_archive, "r:gz") as tar:
                 tar.extractall(path=compat_dir)
@@ -622,14 +797,14 @@ class ProtonDownloaderDialog(ctk.CTkToplevel):
                     os.remove(dest_archive)
                 except Exception:
                     pass
-            self.after(0, lambda err=e: self.show_error(f"Lỗi cài đặt: {err}"))
+            self.after(0, lambda err=e: self.show_error(f"Lỗi cài đặt/giải nén: {err}"))
 
     def update_progress(self, percent, text):
         self.progress_bar.set(percent)
         self.progress_label.configure(text=text)
         
     def download_complete_success(self):
-        messagebox.showinfo("Thành công", "Đã tải và cài đặt Proton-GE thành công!", parent=self)
+        messagebox.showinfo("Thành công", "Tải và cài đặt Proton-GE hoàn tất!", parent=self)
         self.callback()
         self.refresh_ui()
         
@@ -641,14 +816,14 @@ class ProtonDownloaderDialog(ctk.CTkToplevel):
 class DonateDialog(ctk.CTkToplevel):
     def __init__(self, parent_win):
         super().__init__(parent_win.root)
-        self.title("Ủng hộ tác giả (Donate)")
+        self.title("Ủng hộ dự án (Donate)")
         self.geometry("680x340")
         self.resizable(False, False)
         
         self.transient(parent_win.root)
         self.after(250, lambda: self.grab_set())
         
-        lbl_title = ctk.CTkLabel(self, text="☕ Ủng hộ phát triển MicroProton", font=("Helvetica", 16, "bold"))
+        lbl_title = ctk.CTkLabel(self, text="☕ Tài trợ phát triển MicroProton", font=("Helvetica", 16, "bold"))
         lbl_title.pack(pady=(15, 10))
         
         main_layout = ctk.CTkFrame(self, fg_color="transparent")
@@ -706,7 +881,7 @@ class DonateDialog(ctk.CTkToplevel):
         if not qr_loaded:
             lbl_qr_placeholder = ctk.CTkLabel(
                 qr_frame, 
-                text="[ Chưa có mã QR ]\n\nHãy chép ảnh mã QR của bạn\nvào thư mục ứng dụng với tên\n'images/donate_qr.jpg' để hiển thị.",
+                text="[ Không tìm thấy QR Code ]\n\nVui lòng lưu tệp tin QR Code của bạn\nvào thư mục ứng dụng theo đường dẫn:\n'images/donate_qr.jpg' để hiển thị.",
                 font=("Helvetica", 10, "italic"),
                 text_color="gray",
                 justify="center"
@@ -726,7 +901,7 @@ class DonateDialog(ctk.CTkToplevel):
         
         btn_copy_bank = ctk.CTkButton(
             details_frame, 
-            text="Sao chép", 
+            text="Copy", 
             width=70, 
             height=22, 
             font=("Helvetica", 10),
@@ -743,7 +918,7 @@ class DonateDialog(ctk.CTkToplevel):
         
         btn_copy_momo = ctk.CTkButton(
             details_frame, 
-            text="Sao chép", 
+            text="Copy", 
             width=70, 
             height=22, 
             font=("Helvetica", 10),
@@ -759,7 +934,7 @@ class DonateDialog(ctk.CTkToplevel):
         
         btn_open_web = ctk.CTkButton(
             details_frame, 
-            text="Mở link", 
+            text="Open URL", 
             width=70, 
             height=22, 
             font=("Helvetica", 10),
@@ -783,8 +958,8 @@ class DonateDialog(ctk.CTkToplevel):
         val = parts[-1].split("-")[0].strip() if "-" in parts[-1] else parts[-1].strip()
         self.clipboard_append(val)
         
-        button_widget.configure(text="Đã chép!", fg_color="#2eb85c", hover_color="#229949")
-        self.after(1500, lambda: button_widget.configure(text="Sao chép", fg_color="#1f538d", hover_color="#14375e"))
+        button_widget.configure(text="Copied!", fg_color="#2eb85c", hover_color="#229949")
+        self.after(1500, lambda: button_widget.configure(text="Copy", fg_color="#1f538d", hover_color="#14375e"))
         
     def open_github(self):
         webbrowser.open("https://github.com/Huy-Nhan/microproton")
@@ -792,14 +967,14 @@ class DonateDialog(ctk.CTkToplevel):
 class HelpDialog(ctk.CTkToplevel):
     def __init__(self, parent_win):
         super().__init__(parent_win.root)
-        self.title("Hướng dẫn sử dụng MicroProton")
+        self.title("Tài liệu hướng dẫn sử dụng")
         self.geometry("640x500")
         self.minsize(580, 400)
         
         self.transient(parent_win.root)
         self.after(250, lambda: self.grab_set())
         
-        lbl_title = ctk.CTkLabel(self, text="📖 Hướng dẫn sử dụng MicroProton", font=("Helvetica", 16, "bold"))
+        lbl_title = ctk.CTkLabel(self, text="📖 Tài liệu Hướng dẫn sử dụng", font=("Helvetica", 16, "bold"))
         lbl_title.pack(pady=(15, 10))
         
         scroll_help = ctk.CTkScrollableFrame(self)
@@ -807,36 +982,36 @@ class HelpDialog(ctk.CTkToplevel):
         
         self.add_section(
             scroll_help, 
-            "1. Cách thêm và chạy ứng dụng",
-            "• Nhấn nút '+ Thêm ứng dụng' ở bảng bên trái.\n"
-            "• Chọn tệp tin .exe của ứng dụng Windows cần chạy.\n"
-            "• Nhập tên hiển thị và nhấn 'Thêm ứng dụng' để hoàn tất tạo shortcut.\n"
-            "• Chọn ứng dụng trong danh sách và nhấn 'Khởi chạy'."
+            "1. Đăng ký & Khởi chạy Ứng dụng",
+            "• Nhấp nút '+ Đăng ký ứng dụng' trên Sidebar.\n"
+            "• Định cấu hình đường dẫn đến file thực thi .exe.\n"
+            "• Nhập tên định danh và xác nhận đăng ký để khởi tạo Shortcut File (.desktop).\n"
+            "• Chọn ứng dụng trong danh sách và chọn 'Khởi chạy (Launch)'."
         )
         
         self.add_section(
             scroll_help,
-            "2. Gõ Tiếng Việt Telex/VNI (UniKey)",
-            "• Bật tùy chọn 'Bộ gõ tiếng Việt UniKey (Proton)' trong phần cấu hình của app.\n"
-            "• Khi chạy ứng dụng, UniKeyNT.exe sẽ tự động khởi chạy cùng.\n"
-            "• Mẹo sửa lỗi gõ trong WPS Office hoặc một số Game/Phần mềm:\n"
-            "  Nhấp đúp vào biểu tượng UniKey ở khay hệ thống (hoặc mở bảng điều khiển), chọn 'Mở rộng', tích vào ô 'Luôn sử dụng clipboard cho Unicode' rồi đóng lại."
+            "2. Hỗ trợ Bộ gõ Tiếng Việt (UniKey)",
+            "• Kích hoạt tùy chọn 'Tích hợp Bộ gõ Tiếng Việt UniKey (Wine)' trong cấu hình ứng dụng.\n"
+            "• Tiến trình UniKeyNT.exe sẽ tự động khởi chạy đồng thời trong WINEPREFIX.\n"
+            "• Khắc phục lỗi bộ gõ trong một số môi trường đặc thù:\n"
+            "  Mở giao diện điều khiển UniKey -> chọn 'Mở rộng' (Advanced) -> kích hoạt 'Luôn sử dụng clipboard cho Unicode' -> Áp dụng cấu hình."
         )
         
         self.add_section(
             scroll_help,
-            "3. Cài đặt thư viện bổ trợ (Winetricks)",
-            "• Nếu ứng dụng (ví dụ MS Office, Photoshop, v.v.) báo thiếu DLL hoặc không hoạt động:\n"
-            "  Hãy nhấp vào nút 'Thư viện Winetricks' ở bảng cấu hình bên phải của app đó.\n"
-            "• Cài đặt các thư viện phổ biến như: corefonts (Font chữ), dotnet48 (.NET Framework), msxml6, riched20."
+            "3. Cài đặt Runtime & Library Dependencies (Winetricks)",
+            "• Khắc phục lỗi thiếu DLL Dependencies hoặc runtime error:\n"
+            "  Nhấp nút 'Component Manager (Winetricks)' tại menu quản lý ứng dụng.\n"
+            "• Cài đặt các gói tài nguyên cần thiết như: corefonts (Microsoft Core Fonts), dotnet48 (.NET Framework 4.8), msxml6, riched20."
         )
         
         self.add_section(
             scroll_help,
-            "4. MangoHud & GameMode & Màn hình ảo",
-            "• MangoHud: Hiển thị thông số FPS, CPU, RAM, nhiệt độ khi chơi game.\n"
-            "• GameMode: Tối ưu hiệu năng CPU/GPU cho trò chơi.\n"
-            "• Màn hình ảo: Khởi chạy ứng dụng trong một cửa sổ ảo độ phân giải cố định (ví dụ 1280x720) để tránh lỗi đổi độ phân giải màn hình hệ thống."
+            "4. MangoHud, GameMode & Virtual Desktop",
+            "• MangoHud: Hiển thị HUD giám sát hiệu năng (FPS, CPU, RAM, Temperature).\n"
+            "• Feral GameMode: Tối ưu hóa CPU Governor và I/O Scheduler cho tiến trình.\n"
+            "• Virtual Desktop: Thực thi ứng dụng trong cửa sổ giả lập với độ phân giải tuỳ chọn (ví dụ 1280x720) để ngăn chặn việc thay đổi độ phân giải Display gốc của hệ điều hành."
         )
         
         btn_close = ctk.CTkButton(

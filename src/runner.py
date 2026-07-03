@@ -316,7 +316,27 @@ class ProtonRunner:
         is_first_run = not os.path.exists(p_wine)
         
         if is_first_run:
-            cls.show_message("Đang tạo môi trường chạy (Prefix) lần đầu cho ứng dụng này.\nVui lòng đợi vài giây...", timeout=4)
+            use_template = SettingsManager.get_settings().get("use_global_as_template", True)
+            global_pfx = os.path.join(BASE_PREFIX_DIR, "global_default")
+            global_pfx_wine = os.path.join(global_pfx, "pfx")
+            if use_template and prefix_dir != global_pfx and os.path.exists(global_pfx_wine):
+                cls.show_message("Đang đồng bộ cấu hình mặc định (winecfg/winetricks) từ global_default...\nVui lòng đợi giây lát!", timeout=5)
+                try:
+                    if os.path.exists(prefix_dir):
+                        shutil.rmtree(prefix_dir)
+                    shutil.copytree(global_pfx, prefix_dir, symlinks=True)
+                    print(f"Copied global_default template to new sandbox prefix: {prefix_dir}")
+                    is_first_run = False
+                except Exception as e:
+                    print(f"Lỗi khi sao chép cấu hình template global_default: {e}")
+                    if os.path.exists(prefix_dir):
+                        try:
+                            shutil.rmtree(prefix_dir)
+                        except Exception:
+                            pass
+            
+            if is_first_run:
+                cls.show_message("Đang tạo môi trường chạy (Prefix) lần đầu cho ứng dụng này.\nVui lòng đợi vài giây...", timeout=4)
             
         def run_wine_sub(args, background=False, custom_env=None):
             sub_env = custom_env if custom_env else env
@@ -408,9 +428,12 @@ class ProtonRunner:
                 if exe_path:
                     cmd.append(exe_path)
         else:
-            cmd = [exec_bin, action]
-            if action == "run" and exe_path:
-                cmd.append(exe_path)
+            if action in ["winecfg", "regedit"]:
+                cmd = [exec_bin, "run", action]
+            else:
+                cmd = [exec_bin, action]
+                if action == "run" and exe_path:
+                    cmd.append(exe_path)
             
         if gamemode and shutil.which("gamemoderun"):
             cmd = ["gamemoderun"] + cmd

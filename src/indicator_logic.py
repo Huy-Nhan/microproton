@@ -36,27 +36,27 @@ class ProtonIndicator:
         
         self.menu = Gtk.Menu()
         
-        self.menu_status = Gtk.MenuItem(label="MicroProton: Đang dừng")
+        self.menu_status = Gtk.MenuItem(label="MicroProton: Idle")
         self.menu_status.set_sensitive(False)
         self.menu.append(self.menu_status)
         
         self.menu.append(Gtk.SeparatorMenuItem())
         
-        menu_manager = Gtk.MenuItem(label="Mở Manager")
+        menu_manager = Gtk.MenuItem(label="Khởi chạy Manager")
         menu_manager.connect("activate", self.open_manager)
         self.menu.append(menu_manager)
         
-        self.menu_taskbar = Gtk.MenuItem(label="Mở màn hình Windows")
+        self.menu_taskbar = Gtk.MenuItem(label="Mở Virtual Desktop")
         self.menu_taskbar.connect("activate", self.toggle_taskbar)
         self.menu.append(self.menu_taskbar)
         
-        menu_unikey = Gtk.MenuItem(label="Khởi chạy UniKey (Proton)")
+        menu_unikey = Gtk.MenuItem(label="Chạy UniKey (WINE)")
         menu_unikey.connect("activate", self.launch_unikey)
         self.menu.append(menu_unikey)
         
         self.menu.append(Gtk.SeparatorMenuItem())
         
-        menu_kill = Gtk.MenuItem(label="Tắt toàn bộ tiến trình (Kill)")
+        menu_kill = Gtk.MenuItem(label="Kill All Processes")
         menu_kill.connect("activate", self.kill_all)
         self.menu.append(menu_kill)
         
@@ -180,7 +180,7 @@ class ProtonIndicator:
         else:
             import shutil
             if shutil.which("zenity"):
-                subprocess.Popen(["zenity", "--info", "--text=Vui lòng mở Manager và bật UniKey trong Cấu hình hệ thống để tự động tải về trước.", "--title=UniKey chưa được tải"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.Popen(["zenity", "--info", "--text=Vui lòng truy cập Manager -> System Configuration để kích hoạt và tự động tải UniKey.", "--title=UniKey NOT FOUND"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             else:
                 try:
                     import tkinter as tk
@@ -188,10 +188,10 @@ class ProtonIndicator:
                     root = tk.Tk()
                     root.withdraw()
                     root.attributes("-topmost", True)
-                    messagebox.showinfo("UniKey chưa được tải", "Vui lòng mở Manager và bật UniKey trong Cấu hình hệ thống để tự động tải về trước.", parent=root)
+                    messagebox.showinfo("UniKey NOT FOUND", "Vui lòng truy cập Manager -> System Configuration để kích hoạt và tự động tải UniKey.", parent=root)
                     root.destroy()
                 except Exception:
-                    print("[UniKey chưa được tải] Vui lòng mở Manager và bật UniKey trong Cấu hình hệ thống để tự động tải về trước.")
+                    print("[UniKey NOT FOUND] Vui lòng truy cập Manager -> System Configuration để kích hoạt và tự động tải UniKey.")
 
     def kill_all(self, widget):
         proton_versions = ProtonUtils.find_proton_versions()
@@ -397,7 +397,7 @@ class ProtonIndicator:
                     added_new = True
 
         if not matched_pids:
-            return False, "MicroProton: Đang dừng", [], is_taskbar_running
+            return False, "MicroProton: Idle", [], is_taskbar_running
 
         pids = list(matched_pids.keys())
         total_cpu = 0.0
@@ -421,15 +421,15 @@ class ProtonIndicator:
         running_games = sorted(list(set(matched_pids.values())))
         games_str = ", ".join(running_games)
         
-        status_text = f"Đang chạy: {games_str} (CPU: {total_cpu:.1f}%, RAM: {mem_mb:.1f} MB)"
+        status_text = f"Active: {games_str} (CPU: {total_cpu:.1f}%, RAM: {mem_mb:.1f} MB)"
         return True, status_text, running_games, is_taskbar_running
 
     def update_ui(self, status_text, is_taskbar_running):
         self.menu_status.set_label(status_text)
         if is_taskbar_running:
-            self.menu_taskbar.set_label("🖥️ Tắt màn hình Windows")
+            self.menu_taskbar.set_label("🖥️ Tắt Virtual Desktop")
         else:
-            self.menu_taskbar.set_label("🖥️ Mở màn hình Windows")
+            self.menu_taskbar.set_label("🖥️ Mở Virtual Desktop")
 
 
 def main():
