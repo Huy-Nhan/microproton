@@ -1,0 +1,485 @@
+#!/usr/bin/env python3
+import os
+import sys
+import subprocess
+import re
+import hashlib
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+import shutil
+
+APPLICATIONS_DIR = os.path.expanduser("~/.local/share/applications")
+MICRO_PROTON_BIN = os.path.expanduser("~/.local/bin/micro-proton")
+PREFIXES_DIR = os.path.expanduser("~/.local/share/micro-proton/prefixes")
+
+# Ensure directories exist
+os.makedirs(APPLICATIONS_DIR, exist_ok=True)
+
+def get_exe_hash(exe_path):
+    abs_path = os.path.abspath(exe_path)
+    return hashlib.md5(abs_path.encode('utf-8')).hexdigest()[:8]
+
+def get_prefix_dir(exe_path):
+    abs_path = os.path.abspath(exe_path)
+    path_hash = get_exe_hash(abs_path)
+    base_name = os.path.basename(abs_path)
+    clean_name = re.sub(r'[^a-zA-Z0-9_-]', '_', base_name)
+    return os.path.join(PREFIXES_DIR, f"{clean_name}_{path_hash}")
+
+def scan_apps():
+    """Scans ~/.local/share/applications/ for apps managed by MicroProton."""
+    apps = []
+    if not os.path.exists(APPLICATIONS_DIR):
+        return apps
+        
+    for filename in os.listdir(APPLICATIONS_DIR):
+        if not filename.endswith(".desktop") or not filename.startswith("micro-proton-"):
+            continue
+            
+        filepath = os.path.join(APPLICATIONS_DIR, filename)
+        app_info = {
+            "desktop_file": filepath,
+            "filename": filename,
+            "name": "",
+            "exe": "",
+            "icon": "",
+            "prefix": ""
+        }
+        
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                content = f.read()
+                
+            name_match = re.search(r"^Name=(.*)$", content, re.MULTILINE)
+            exe_match = re.search(r"^X-MicroProton-Exe=(.*)$", content, re.MULTILINE)
+            icon_match = re.search(r"^Icon=(.*)$", content, re.MULTILINE)
+            
+            if name_match:
+                app_info["name"] = name_match.group(1).strip()
+            if exe_match:
+                app_info["exe"] = exe_match.group(1).strip()
+            if icon_match:
+                app_info["icon"] = icon_match.group(1).strip()
+                
+            # Parse custom prefix if defined in Exec line
+            prefix_match = re.search(r'--prefix\s+"([^"]+)"', content)
+            if prefix_match:
+                app_info["prefix"] = prefix_match.group(1).strip()
+            elif app_info["exe"]:
+                app_info["prefix"] = get_prefix_dir(app_info["exe"])
+                
+            if app_info["name"] and app_info["exe"]:
+                apps.append(app_info)
+        except Exception as e:
+            print(f"Lỗi khi đọc {filename}: {e}")
+            
+    return apps
+
+class AppManagerWindow:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("MicroProton App Manager")
+        self.root.geometry("700x480")
+        self.root.minsize(600, 380)
+        
+        # Style
+        self.style = ttk.Style()
+        self.style.theme_use("clam")
+        
+        # Layout
+        self.create_widgets()
+        self.refresh_list()
+        
+    def create_widgets(self):
+        # Top frame
+        top_frame = ttk.Frame(self.root, padding=10)
+        top_frame.pack(fill=tk.X)
+        
+        lbl_title = ttk.Label(top_frame, text="Quản lý ứng dụng Windows (Proton)", font=("Helvetica", 14, "bold"))
+        lbl_title.pack(side=tk.LEFT)
+        
+        btn_add = ttk.Button(top_frame, text="+ Thêm ứng dụng", command=self.add_app_dialog)
+        btn_add.pack(side=tk.RIGHT)
+        
+        # Main list frame
+        list_frame = ttk.Frame(self.root, padding=10)
+        list_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Scrollbars and Treeview
+        vsb = ttk.Scrollbar(list_frame, orient="vertical")
+        hsb = ttk.Scrollbar(list_frame, orient="horizontal")
+        
+        self.tree = ttk.Treeview(
+            list_frame, 
+            columns=("name", "exe"), 
+            show="headings",
+            yscrollcommand=vsb.set, 
+            xscrollcommand=hsb.set,
+            selectmode="browse"
+        )
+        
+        self.tree.heading("name", text="Tên ứng dụng")
+        self.tree.heading("exe", text="Đường dẫn file .exe")
+        self.tree.column("name", width=200, anchor=tk.W)
+        self.tree.column("exe", width=450, anchor=tk.W)
+        
+        vsb.config(command=self.tree.yview)
+        hsb.config(command=self.tree.xview)
+        
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+        
+        list_frame.grid_columnconfigure(0, weight=1)
+        list_frame.grid_rowconfigure(0, weight=1)
+        
+        # Double click to launch
+        self.tree.bind("<Double-1>", lambda event: self.launch_app())
+        
+        # Action buttons frame (Bottom)
+        bottom_frame = ttk.Frame(self.root, padding=10)
+        bottom_frame.pack(fill=tk.X)
+        
+        self.btn_run = ttk.Button(bottom_frame, text="Chạy ứng dụng", command=self.launch_app)
+        self.btn_run.pack(side=tk.LEFT, padx=3)
+        
+        self.btn_edit = ttk.Button(bottom_frame, text="Sửa tên/icon", command=self.edit_app_dialog)
+        self.btn_edit.pack(side=tk.LEFT, padx=3)
+        
+        self.btn_browse = ttk.Button(bottom_frame, text="Duyệt ổ C:", command=self.browse_c_drive)
+        self.btn_browse.pack(side=tk.LEFT, padx=3)
+        
+        self.btn_change_exe = ttk.Button(bottom_frame, text="Đổi file chạy", command=self.change_exe_target)
+        self.btn_change_exe.pack(side=tk.LEFT, padx=3)
+        
+        self.btn_cfg = ttk.Button(bottom_frame, text="Winecfg", command=self.run_winecfg)
+        self.btn_cfg.pack(side=tk.LEFT, padx=3)
+        
+        self.btn_kill = ttk.Button(bottom_frame, text="Tắt", command=self.kill_app)
+        self.btn_kill.pack(side=tk.LEFT, padx=3)
+        
+        self.btn_del = ttk.Button(bottom_frame, text="Xóa", command=self.delete_app)
+        self.btn_del.pack(side=tk.RIGHT, padx=3)
+        
+    def refresh_list(self):
+        # Clear tree
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+            
+        self.apps = scan_apps()
+        for idx, app in enumerate(self.apps):
+            self.tree.insert("", tk.END, iid=str(idx), values=(app["name"], app["exe"]))
+            
+    def get_selected_app(self):
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("Cảnh báo", "Vui lòng chọn một ứng dụng trong danh sách!")
+            return None
+        idx = int(selected[0])
+        return self.apps[idx]
+        
+    def launch_app(self):
+        app = self.get_selected_app()
+        if app:
+            subprocess.Popen([MICRO_PROTON_BIN, "--prefix", app["prefix"], app["exe"]])
+            
+    def run_winecfg(self):
+        app = self.get_selected_app()
+        if app:
+            subprocess.Popen([MICRO_PROTON_BIN, "--prefix", app["prefix"], "--winecfg", app["exe"]])
+            
+    def kill_app(self):
+        app = self.get_selected_app()
+        if app:
+            subprocess.Popen([MICRO_PROTON_BIN, "--prefix", app["prefix"], "--kill", app["exe"]])
+            
+    def browse_c_drive(self):
+        app = self.get_selected_app()
+        if app:
+            prefix_dir = app["prefix"]
+            c_drive = os.path.join(prefix_dir, "pfx", "drive_c")
+            if os.path.exists(c_drive):
+                subprocess.Popen(["xdg-open", c_drive])
+            else:
+                messagebox.showerror("Lỗi", "Thư mục ổ C: ảo chưa được tạo (hãy chạy ứng dụng hoặc cài đặt ít nhất một lần để khởi tạo).")
+
+    def change_exe_target(self):
+        app = self.get_selected_app()
+        if not app:
+            return
+            
+        prefix_dir = app["prefix"]
+        c_drive = os.path.join(prefix_dir, "pfx", "drive_c")
+        if not os.path.exists(c_drive):
+            messagebox.showerror("Lỗi", "Thư mục ổ C: ảo chưa được tạo. Vui lòng khởi chạy file cài đặt một lần trước.")
+            return
+            
+        new_exe = filedialog.askopenfilename(
+            title="Chọn file chạy (.exe) đã cài đặt",
+            initialdir=c_drive,
+            filetypes=[("Windows Executable", "*.exe"), ("All files", "*.*")]
+        )
+        
+        if new_exe:
+            desktop_path = app["desktop_file"]
+            try:
+                # Update Exec and X-MicroProton-Exe while retaining the prefix
+                content = f"""[Desktop Entry]
+Name={app['name']}
+Exec={MICRO_PROTON_BIN} --prefix "{prefix_dir}" "{new_exe}"
+Icon={app['icon']}
+Terminal=false
+Type=Application
+Categories=Game;Emulator;Utility;
+MimeType=application/x-ms-dos-executable;
+Comment=Chạy bằng MicroProton
+X-MicroProton-Exe={new_exe}
+"""
+                with open(desktop_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                
+                subprocess.run(["update-desktop-database", APPLICATIONS_DIR])
+                messagebox.showinfo("Thành công", f"Đã chuyển đổi đường dẫn chạy sang tệp tin đã cài đặt:\n{os.path.basename(new_exe)}")
+                self.refresh_list()
+            except Exception as e:
+                messagebox.showerror("Lỗi", f"Không thể cập nhật đường dẫn: {e}")
+
+    def delete_app(self):
+        app = self.get_selected_app()
+        if not app:
+            return
+            
+        confirm = messagebox.askyesno(
+            "Xác nhận xóa", 
+            f"Bạn có chắc muốn gỡ bỏ ứng dụng '{app['name']}' khỏi danh sách ứng dụng Fedora không?"
+        )
+        if not confirm:
+            return
+            
+        # Delete desktop file
+        try:
+            if os.path.exists(app["desktop_file"]):
+                os.remove(app["desktop_file"])
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Không thể xóa tệp desktop: {e}")
+            return
+            
+        # Ask to delete prefix
+        delete_prefix = messagebox.askyesno(
+            "Xóa bộ nhớ đệm (Prefix)",
+            "Bạn có muốn xóa toàn bộ ổ C: ảo (Prefix) của ứng dụng này để giải phóng dung lượng đĩa không?\n(Hành động này sẽ xóa tất cả lưu trữ/save game bên trong ứng dụng)."
+        )
+        if delete_prefix:
+            prefix_dir = app["prefix"]
+            if os.path.exists(prefix_dir):
+                try:
+                    shutil.rmtree(prefix_dir)
+                    messagebox.showinfo("Thành công", "Đã xóa ứng dụng và ổ C: ảo thành công.")
+                except Exception as e:
+                    messagebox.showerror("Lỗi", f"Không thể xóa thư mục ổ C: ảo: {e}")
+            else:
+                messagebox.showinfo("Thành công", "Đã gỡ ứng dụng. Thư mục ổ C: ảo không tồn tại hoặc đã được xóa trước đó.")
+        else:
+            messagebox.showinfo("Thành công", "Đã gỡ ứng dụng nhưng giữ lại ổ C: ảo.")
+            
+        # Refresh desktop database
+        subprocess.run(["update-desktop-database", APPLICATIONS_DIR])
+        self.refresh_list()
+        
+    def add_app_dialog(self):
+        AddAppDialog(self.root, self.refresh_list)
+        
+    def edit_app_dialog(self):
+        app = self.get_selected_app()
+        if app:
+            EditAppDialog(self.root, app, self.refresh_list)
+
+class AddAppDialog:
+    def __init__(self, parent, callback):
+        self.callback = callback
+        self.win = tk.Toplevel(parent)
+        self.win.title("Thêm ứng dụng mới")
+        self.win.geometry("500x250")
+        self.win.grab_set()
+        
+        self.exe_path = ""
+        self.icon_path = "com.valvesoftware.Steam" # Default icon
+        
+        self.create_widgets()
+        
+    def create_widgets(self):
+        frame = ttk.Frame(self.win, padding=15)
+        frame.pack(fill=tk.BOTH, expand=True)
+        
+        # EXE Path selection
+        ttk.Label(frame, text="Tệp tin Windows (.exe):").grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.ent_exe = ttk.Entry(frame, width=35)
+        self.ent_exe.grid(row=0, column=1, pady=5, padx=5)
+        ttk.Button(frame, text="Chọn...", command=self.select_exe).grid(row=0, column=2, pady=5)
+        
+        # Display Name
+        ttk.Label(frame, text="Tên ứng dụng hiển thị:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.ent_name = ttk.Entry(frame, width=35)
+        self.ent_name.grid(row=1, column=1, columnspan=2, pady=5, padx=5, sticky=tk.W+tk.E)
+        
+        # Icon selection
+        ttk.Label(frame, text="Biểu tượng (Icon):").grid(row=2, column=0, sticky=tk.W, pady=5)
+        self.ent_icon = ttk.Entry(frame, width=35)
+        self.ent_icon.insert(0, self.icon_path)
+        self.ent_icon.grid(row=2, column=1, pady=5, padx=5)
+        ttk.Button(frame, text="Chọn...", command=self.select_icon).grid(row=2, column=2, pady=5)
+        
+        # Buttons
+        btn_frame = ttk.Frame(frame, padding=10)
+        btn_frame.grid(row=3, column=0, columnspan=3, pady=15)
+        
+        ttk.Button(btn_frame, text="Hủy bỏ", command=self.win.destroy).pack(side=tk.LEFT, padx=10)
+        ttk.Button(btn_frame, text="Thêm", command=self.save_app).pack(side=tk.LEFT, padx=10)
+        
+    def select_exe(self):
+        file_path = filedialog.askopenfilename(
+            title="Chọn file executable",
+            filetypes=[("Windows Executable", "*.exe"), ("All files", "*.*")]
+        )
+        if file_path:
+            self.exe_path = file_path
+            self.ent_exe.delete(0, tk.END)
+            self.ent_exe.insert(0, file_path)
+            
+            # Suggest app name based on file name
+            suggested_name = os.path.splitext(os.path.basename(file_path))[0]
+            suggested_name = suggested_name.replace("_", " ").replace("-", " ").title()
+            self.ent_name.delete(0, tk.END)
+            self.ent_name.insert(0, suggested_name)
+            
+    def select_icon(self):
+        file_path = filedialog.askopenfilename(
+            title="Chọn hình ảnh làm Icon",
+            filetypes=[("Image files", "*.png *.jpg *.jpeg *.svg"), ("All files", "*.*")]
+        )
+        if file_path:
+            self.icon_path = file_path
+            self.ent_icon.delete(0, tk.END)
+            self.ent_icon.insert(0, file_path)
+            
+    def save_app(self):
+        name = self.ent_name.get().strip()
+        exe = self.ent_exe.get().strip()
+        icon = self.ent_icon.get().strip()
+        
+        if not name or not exe:
+            messagebox.showerror("Lỗi", "Tên ứng dụng và đường dẫn .exe không được để trống!")
+            return
+            
+        if not os.path.exists(exe):
+            messagebox.showerror("Lỗi", f"Tệp tin .exe không tồn tại tại đường dẫn đã nhập!")
+            return
+            
+        # Write desktop file
+        exe_hash = get_exe_hash(exe)
+        desktop_filename = f"micro-proton-app-{exe_hash}.desktop"
+        desktop_path = os.path.join(APPLICATIONS_DIR, desktop_filename)
+        prefix_dir = get_prefix_dir(exe)
+        
+        content = f"""[Desktop Entry]
+Name={name}
+Exec={MICRO_PROTON_BIN} --prefix "{prefix_dir}" "{exe}"
+Icon={icon}
+Terminal=false
+Type=Application
+Categories=Game;Emulator;Utility;
+MimeType=application/x-ms-dos-executable;
+Comment=Chạy bằng MicroProton
+X-MicroProton-Exe={exe}
+"""
+        try:
+            with open(desktop_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            
+            # Update desktop database
+            subprocess.run(["update-desktop-database", APPLICATIONS_DIR])
+            self.callback()
+            self.win.destroy()
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Không thể lưu ứng dụng: {e}")
+
+class EditAppDialog:
+    def __init__(self, parent, app, callback):
+        self.app = app
+        self.callback = callback
+        self.win = tk.Toplevel(parent)
+        self.win.title("Chỉnh sửa ứng dụng")
+        self.win.geometry("500x200")
+        self.win.grab_set()
+        
+        self.icon_path = app["icon"]
+        self.create_widgets()
+        
+    def create_widgets(self):
+        frame = ttk.Frame(self.win, padding=15)
+        frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Display Name
+        ttk.Label(frame, text="Tên hiển thị:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        self.ent_name = ttk.Entry(frame, width=35)
+        self.ent_name.insert(0, self.app["name"])
+        self.ent_name.grid(row=0, column=1, columnspan=2, pady=5, padx=5, sticky=tk.W+tk.E)
+        
+        # Icon selection
+        ttk.Label(frame, text="Biểu tượng (Icon):").grid(row=1, column=0, sticky=tk.W, pady=5)
+        self.ent_icon = ttk.Entry(frame, width=35)
+        self.ent_icon.insert(0, self.icon_path)
+        self.ent_icon.grid(row=1, column=1, pady=5, padx=5)
+        ttk.Button(frame, text="Chọn...", command=self.select_icon).grid(row=1, column=2, pady=5)
+        
+        # Buttons
+        btn_frame = ttk.Frame(frame, padding=10)
+        btn_frame.grid(row=2, column=0, columnspan=3, pady=15)
+        
+        ttk.Button(btn_frame, text="Hủy bỏ", command=self.win.destroy).pack(side=tk.LEFT, padx=10)
+        ttk.Button(btn_frame, text="Lưu", command=self.save_app).pack(side=tk.LEFT, padx=10)
+        
+    def select_icon(self):
+        file_path = filedialog.askopenfilename(
+            title="Chọn hình ảnh làm Icon",
+            filetypes=[("Image files", "*.png *.jpg *.jpeg *.svg"), ("All files", "*.*")]
+        )
+        if file_path:
+            self.icon_path = file_path
+            self.ent_icon.delete(0, tk.END)
+            self.ent_icon.insert(0, file_path)
+            
+    def save_app(self):
+        name = self.ent_name.get().strip()
+        icon = self.ent_icon.get().strip()
+        
+        if not name:
+            messagebox.showerror("Lỗi", "Tên ứng dụng không được để trống!")
+            return
+            
+        content = f"""[Desktop Entry]
+Name={name}
+Exec={MICRO_PROTON_BIN} --prefix "{self.app['prefix']}" "{self.app['exe']}"
+Icon={icon}
+Terminal=false
+Type=Application
+Categories=Game;Emulator;Utility;
+MimeType=application/x-ms-dos-executable;
+Comment=Chạy bằng MicroProton
+X-MicroProton-Exe={self.app['exe']}
+"""
+        try:
+            with open(self.app["desktop_file"], "w", encoding="utf-8") as f:
+                f.write(content)
+            
+            # Update desktop database
+            subprocess.run(["update-desktop-database", APPLICATIONS_DIR])
+            self.callback()
+            self.win.destroy()
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Không thể lưu ứng dụng: {e}")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = AppManagerWindow(root)
+    root.mainloop()
