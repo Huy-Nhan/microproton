@@ -17,11 +17,15 @@ rm -f "build/${PACKAGE_NAME}_${VERSION}_all.deb"
 mkdir -p "${BUILD_DIR}/DEBIAN"
 mkdir -p "${BUILD_DIR}/usr/bin"
 mkdir -p "${BUILD_DIR}/usr/share/applications"
+mkdir -p "${BUILD_DIR}/usr/share/micro-proton/src"
+mkdir -p "${BUILD_DIR}/usr/share/micro-proton/images"
 
-# Copy executables
+# Copy executables and libraries
 cp micro-proton "${BUILD_DIR}/usr/bin/micro-proton"
 cp micro-proton-indicator "${BUILD_DIR}/usr/bin/micro-proton-indicator"
 cp micro-proton-manager "${BUILD_DIR}/usr/bin/micro-proton-manager"
+cp -r src/* "${BUILD_DIR}/usr/share/micro-proton/src/"
+cp -r images/* "${BUILD_DIR}/usr/share/micro-proton/images/"
 
 # Make sure they are executable
 chmod 755 "${BUILD_DIR}/usr/bin/micro-proton"

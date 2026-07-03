@@ -25,11 +25,15 @@ MangoHud, GameMode, and taskbar integration.
 %install
 mkdir -p %{buildroot}%{_bindir}
 mkdir -p %{buildroot}%{_datadir}/applications
+mkdir -p %{buildroot}%{_datadir}/micro-proton/src
+mkdir -p %{buildroot}%{_datadir}/micro-proton/images
 
-# Copy the executables from the source directory
+# Copy the executables and source modules
 cp %{_sourcedir}/micro-proton %{buildroot}%{_bindir}/micro-proton
 cp %{_sourcedir}/micro-proton-indicator %{buildroot}%{_bindir}/micro-proton-indicator
 cp %{_sourcedir}/micro-proton-manager %{buildroot}%{_bindir}/micro-proton-manager
+cp -r %{_sourcedir}/src/* %{buildroot}%{_datadir}/micro-proton/src/
+cp -r %{_sourcedir}/images/* %{buildroot}%{_datadir}/micro-proton/images/
 
 chmod 755 %{buildroot}%{_bindir}/micro-proton
 chmod 755 %{buildroot}%{_bindir}/micro-proton-indicator
@@ -64,6 +68,7 @@ EOF
 %{_bindir}/micro-proton-manager
 %{_datadir}/applications/micro-proton-manager.desktop
 %{_datadir}/applications/micro-proton-indicator.desktop
+%{_datadir}/micro-proton
 
 %changelog
 * Fri Jul 03 2026 Ryando <ryando@example.com> - 1.0.0-1

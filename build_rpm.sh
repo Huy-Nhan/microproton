@@ -20,6 +20,8 @@ mkdir -p "${RPMBUILD_DIR}/SPECS"
 cp micro-proton "${RPMBUILD_DIR}/SOURCES/"
 cp micro-proton-indicator "${RPMBUILD_DIR}/SOURCES/"
 cp micro-proton-manager "${RPMBUILD_DIR}/SOURCES/"
+cp -r src "${RPMBUILD_DIR}/SOURCES/"
+cp -r images "${RPMBUILD_DIR}/SOURCES/"
 
 # Copy spec file to the SPECS directory
 cp micro-proton.spec "${RPMBUILD_DIR}/SPECS/"
