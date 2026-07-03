@@ -255,7 +255,7 @@ class AddAppDialog(ctk.CTkToplevel):
             if os.path.exists(c_drive):
                 init_dir = c_drive
                 
-        file_path = ProtonUtils.select_file_via_zenity("Chọn file Windows Executable (.exe)", init_dir)
+        file_path = ProtonUtils.select_file_via_zenity("Chọn file Windows Executable (.exe)", init_dir, parent=self)
         if file_path:
             self.exe_path = file_path
             self.ent_exe.delete(0, tk.END)
@@ -267,7 +267,7 @@ class AddAppDialog(ctk.CTkToplevel):
             self.ent_name.insert(0, suggested_name)
             
     def select_icon(self):
-        file_path = ProtonUtils.select_image_via_zenity("Chọn hình ảnh làm Icon")
+        file_path = ProtonUtils.select_image_via_zenity("Chọn hình ảnh làm Icon", parent=self)
         if file_path:
             self.icon_path = file_path
             self.ent_icon.delete(0, tk.END)

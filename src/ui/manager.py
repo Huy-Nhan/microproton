@@ -808,7 +808,7 @@ class AppManagerWindow:
             messagebox.showerror("Lỗi", "Thư mục ổ C: ảo chưa được tạo. Vui lòng khởi chạy một lần trước.")
             return
             
-        new_exe = ProtonUtils.select_file_via_zenity("Chọn file chạy (.exe) đã cài đặt", c_drive)
+        new_exe = ProtonUtils.select_file_via_zenity("Chọn file chạy (.exe) đã cài đặt", c_drive, parent=self.root)
         
         if new_exe:
             desktop_path = app["desktop_file"]
@@ -870,17 +870,30 @@ class AppManagerWindow:
             
         confirm = messagebox.askyesno(
             "Xác nhận xóa", 
-            f"Bạn có chắc muốn gỡ bỏ ứng dụng '{app['name']}' khỏi danh sách ứng dụng Fedora/Linux không?\n(Lưu ý: Ổ đĩa ảo C: của ứng dụng sẽ được giữ lại)."
+            f"Bạn có chắc muốn gỡ bỏ ứng dụng '{app['name']}' khỏi danh sách ứng dụng Linux không?"
         )
         if not confirm:
             return
             
+        delete_prefix = False
+        global_prefix = ProtonUtils.get_prefix_dir(None)
+        if os.path.abspath(app["prefix"]) != os.path.abspath(global_prefix):
+            delete_prefix = messagebox.askyesno(
+                "Xác nhận xóa thư mục Prefix",
+                f"Ứng dụng này đang chạy trong ổ ảo Sandbox riêng biệt:\n{app['prefix']}\n\nBạn có muốn XÓA HOÀN TOÀN thư mục này để giải phóng dung lượng không?\n(Lưu ý: Mọi dữ liệu lưu game/cấu hình sẽ bị xóa)."
+            )
+            
         try:
             if os.path.exists(app["desktop_file"]):
                 os.remove(app["desktop_file"])
-            messagebox.showinfo("Thành công", "Đã gỡ ứng dụng thành công (đã giữ lại ổ C: ảo).")
+                
+            if delete_prefix and os.path.exists(app["prefix"]):
+                shutil.rmtree(app["prefix"])
+                messagebox.showinfo("Thành công", "Đã gỡ ứng dụng và xóa sạch thư mục ổ C: ảo thành công.")
+            else:
+                messagebox.showinfo("Thành công", "Đã gỡ ứng dụng thành công (đã giữ lại ổ C: ảo).")
         except Exception as e:
-            messagebox.showerror("Lỗi", f"Không thể xóa tệp desktop: {e}")
+            messagebox.showerror("Lỗi", f"Không thể xóa ứng dụng: {e}")
             return
             
         subprocess.run(["update-desktop-database", ProtonUtils.APPLICATIONS_DIR])
@@ -894,7 +907,7 @@ class AppManagerWindow:
         prefix_dir = app["prefix"]
         app_name = app["name"]
         
-        file_path = ProtonUtils.select_save_file_via_zenity(f"Sao lưu Prefix cho {app_name}", f"micro_proton_{app_name.lower().replace(' ', '_')}_backup.zip")
+        file_path = ProtonUtils.select_save_file_via_zenity(f"Sao lưu Prefix cho {app_name}", f"micro_proton_{app_name.lower().replace(' ', '_')}_backup.zip", parent=self.root)
         if not file_path:
             return
             
@@ -928,7 +941,7 @@ class AppManagerWindow:
         if not confirm:
             return
             
-        file_path = ProtonUtils.select_zip_file_via_zenity(f"Chọn tệp sao lưu .zip cho {app_name}")
+        file_path = ProtonUtils.select_zip_file_via_zenity(f"Chọn tệp sao lưu .zip cho {app_name}", parent=self.root)
         if not file_path:
             return
             
@@ -1039,7 +1052,7 @@ class AppManagerWindow:
             messagebox.showerror("Lỗi", f"Không thể lưu thông tin: {e}")
 
     def select_icon_edit(self):
-        file_path = ProtonUtils.select_image_via_zenity("Chọn hình ảnh làm Icon")
+        file_path = ProtonUtils.select_image_via_zenity("Chọn hình ảnh làm Icon", parent=self.root)
         if file_path:
             self.ent_icon.delete(0, tk.END)
             self.ent_icon.insert(0, file_path)
@@ -1120,13 +1133,35 @@ class AppManagerWindow:
         proton_name, proton_path = proton_versions[0]
         prefix_dir = ProtonUtils.get_prefix_dir("")
         
+        # Kill any existing explorer.exe processes first to ensure clean startup and avoid duplicate taskbars
+        import glob
+        my_uid = os.getuid()
+        for pid_dir in glob.glob("/proc/[0-9]*"):
+            pid = os.path.basename(pid_dir)
+            try:
+                stat_info = os.stat(pid_dir)
+                if stat_info.st_uid != my_uid:
+                    continue
+                cmdline_path = os.path.join(pid_dir, "cmdline")
+                if os.path.exists(cmdline_path):
+                    with open(cmdline_path, "rb") as f:
+                        cmd_data = f.read()
+                    cmd_str = cmd_data.decode("utf-8", errors="ignore").replace("\x00", " ")
+                    if "explorer.exe" in cmd_str:
+                        os.kill(int(pid), 9)
+            except Exception:
+                pass
+
         resolution = "1280x720"
         try:
             if hasattr(self, "opt_resolution") and self.opt_resolution:
                 resolution = self.opt_resolution.get()
         except Exception:
             pass
-
+            
+        if not resolution or resolution == "Tự động":
+            resolution = ProtonUtils.get_screen_resolution()
+            
         is_system_wine = "wine" in os.path.basename(proton_path).lower()
         env = os.environ.copy()
         env["WINEPREFIX"] = prefix_dir
@@ -1134,12 +1169,31 @@ class AppManagerWindow:
             env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = ProtonUtils.STEAM_PATH
             env["STEAM_COMPAT_DATA_PATH"] = prefix_dir
             env["PROTON_NO_PATH_TRANSLATION"] = "1"
+            
+        # Write Explorer Virtual Desktop Registry keys to prefix to ensure stability
+        reg_vd_path = os.path.join(prefix_dir, "virtual_desktop_global.reg")
+        try:
+            with open(reg_vd_path, "w") as f:
+                f.write("Windows Registry Editor Version 5.00\n\n")
+                f.write("[HKEY_CURRENT_USER\\Software\\Wine\\Explorer]\n")
+                f.write('"Desktop"="Default"\n\n')
+                f.write("[HKEY_CURRENT_USER\\Software\\Wine\\Explorer\\Desktops]\n")
+                f.write(f'"Default"="{resolution}"\n')
+            
+            # Execute regedit to register it
+            reg_env = env.copy()
+            if is_system_wine:
+                subprocess.run([proton_path, "regedit", reg_vd_path], env=reg_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                subprocess.run([proton_path, "run", "regedit", reg_vd_path], env=reg_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            print(f"Error applying virtual desktop registry: {e}")
         
         try:
             if is_system_wine:
-                subprocess.Popen([proton_path, "explorer.exe", f"/desktop=Default,{resolution}"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.Popen([proton_path, "explorer.exe", f"/desktop=Default,{resolution}", "explorer.exe"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             else:
-                subprocess.Popen([proton_path, "run", "explorer.exe", f"/desktop=Default,{resolution}"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.Popen([proton_path, "run", "explorer.exe", f"/desktop=Default,{resolution}", "explorer.exe"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             messagebox.showinfo("Thành công", f"Đang khởi chạy màn hình ảo Windows ({resolution}) trong nền...")
         except Exception as e:
             messagebox.showerror("Lỗi", f"Không thể mở màn hình Windows ảo: {e}")
@@ -1194,11 +1248,39 @@ class AppManagerWindow:
         matched_pids = set()
         parent_map = {}
         
+        wine_keywords = {"wine", "proton", "wineserver", "explorer.exe", "unikey", "conhost", "winedevice", "plugplay", "rpcss", "services.exe", "svchost.exe", "wineboot.exe"}
+        
         for pid_dir in glob.glob("/proc/[0-9]*"):
             pid = os.path.basename(pid_dir)
             try:
                 stat_info = os.stat(pid_dir)
                 if stat_info.st_uid != my_uid:
+                    continue
+                    
+                # 1. Cheap check on command name to reduce CPU overhead
+                comm_path = os.path.join(pid_dir, "comm")
+                comm_name = ""
+                if os.path.exists(comm_path):
+                    with open(comm_path, "r") as f:
+                        comm_name = f.read().strip().lower()
+                
+                is_candidate = False
+                for kw in wine_keywords:
+                    if kw in comm_name:
+                        is_candidate = True
+                        break
+                        
+                if not is_candidate:
+                    # Also check cmdline for python launcher, gamemode, or windows .exe binary
+                    cmdline_path = os.path.join(pid_dir, "cmdline")
+                    if os.path.exists(cmdline_path):
+                        with open(cmdline_path, "rb") as f:
+                            cmd_data = f.read()
+                        cmd_str = cmd_data.decode("utf-8", errors="ignore").lower()
+                        if "wine" in cmd_str or "proton" in cmd_str or "micro-proton" in cmd_str or ".exe" in cmd_str or ".exe" in comm_name:
+                            is_candidate = True
+                                
+                if not is_candidate:
                     continue
                     
                 stat_path = os.path.join(pid_dir, "stat")
@@ -1390,7 +1472,7 @@ def main():
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("blue")
     
-    root = ctk.CTk()
+    root = ctk.CTk(className="micro-proton-manager")
     app = AppManagerWindow(root)
     
     if not check_single_instance(root, app):

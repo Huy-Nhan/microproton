@@ -24,11 +24,14 @@ else:
 class ProtonRunner:
     @staticmethod
     def show_message(text, title="Thông báo", timeout=3):
-        """Displays a desktop notification using Zenity."""
+        """Displays a desktop notification using notify-send or Zenity."""
         try:
             def run_msg():
                 try:
-                    subprocess.run(["zenity", "--info", f"--text={text}", f"--title={title}", f"--timeout={timeout}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    if shutil.which("notify-send"):
+                        subprocess.run(["notify-send", title, text, "-t", str(timeout * 1000)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    elif shutil.which("zenity"):
+                        subprocess.run(["zenity", "--info", f"--text={text}", f"--title={title}", f"--timeout={timeout}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 except Exception:
                     pass
             threading.Thread(target=run_msg, daemon=True).start()
@@ -37,6 +40,8 @@ class ProtonRunner:
 
     @staticmethod
     def get_target_wineserver_path(proton_path):
+        if not proton_path:
+            return None
         is_system_wine = "wine" in os.path.basename(proton_path).lower()
         if is_system_wine:
             return shutil.which("wineserver") or "wineserver"
@@ -100,16 +105,26 @@ class ProtonRunner:
             print(f"Phát hiện lệch phiên bản wineserver: đang chạy {running_wineserver_exe}, yêu cầu {wineserver_only_mismatch}. Tiến hành dọn dẹp prefix...")
             cls.show_message("Phát hiện lệch phiên bản Wine/Proton đang chạy trên Prefix này.\nHệ thống đang dọn dẹp các tiến trình cũ để tránh lỗi...", timeout=4)
         
-        # Kill the processes
+        # Kill the processes gracefully first with SIGTERM (15), then SIGKILL (9)
         for pid in prefix_processes:
             try:
-                os.kill(pid, 9)
+                os.kill(pid, 15)
             except Exception:
                 pass
                 
         if prefix_processes:
             import time
-            time.sleep(1.0)
+            time.sleep(0.5)
+            # Recheck and force kill if still alive
+            for pid in prefix_processes:
+                try:
+                    os.kill(pid, 0) # Checks if process is alive
+                    os.kill(pid, 9)
+                except OSError:
+                    pass
+                except Exception:
+                    pass
+            time.sleep(0.5)
             return True
         return False
 
@@ -240,9 +255,12 @@ class ProtonRunner:
         env["WINEPREFIX"] = prefix_dir
         env["NO_AT_BRIDGE"] = "1"
         env["GTK_A11Y"] = "none"
-        is_system_wine = "wine" in os.path.basename(proton_path).lower()
+        
+        is_system_wine = False
+        if proton_path:
+            is_system_wine = "wine" in os.path.basename(proton_path).lower()
 
-        if not is_system_wine:
+        if proton_path and not is_system_wine:
             env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = STEAM_PATH
             env["STEAM_COMPAT_DATA_PATH"] = prefix_dir
             exe_hash = ProtonUtils.get_exe_hash(exe_path) if exe_path else ""
@@ -302,10 +320,12 @@ class ProtonRunner:
             
         def run_wine_sub(args, background=False, custom_env=None):
             sub_env = custom_env if custom_env else env
-            if is_system_wine:
-                full_cmd = [proton_path] + args
+            exec_bin = proton_path or "wine"
+            is_sys_wine = is_system_wine or (not proton_path)
+            if is_sys_wine:
+                full_cmd = [exec_bin] + args
             else:
-                full_cmd = [proton_path, "run"] + args
+                full_cmd = [exec_bin, "run"] + args
                 
             if gamemode and shutil.which("gamemoderun"):
                 full_cmd = ["gamemoderun"] + full_cmd
@@ -345,9 +365,9 @@ class ProtonRunner:
                     
             if taskbar:
                 taskbar_env = env.copy()
-                if not is_system_wine:
+                if proton_path and not is_system_wine:
                     taskbar_env["PROTON_NO_PATH_TRANSLATION"] = "1"
-                run_wine_sub(["explorer.exe", "/desktop=Default,1280x720"], background=True, custom_env=taskbar_env)
+                run_wine_sub(["explorer.exe", "/desktop=Default,1280x720", "explorer.exe"], background=True, custom_env=taskbar_env)
                 
         reg_vd_path = os.path.join(prefix_dir, "virtual_desktop.reg")
         if virtual_desktop:
@@ -372,20 +392,23 @@ class ProtonRunner:
                 except Exception as e:
                     print(f"Lỗi gỡ cấu hình Virtual Desktop: {e}")
                 
-        if is_system_wine:
+        exec_bin = proton_path or "wine"
+        is_sys_wine = is_system_wine or (not proton_path)
+        
+        if is_sys_wine:
             if action == "run":
-                cmd = [proton_path]
+                cmd = [exec_bin]
                 if exe_path:
                     cmd.append(exe_path)
             elif action == "winecfg":
                 winecfg_bin = shutil.which("winecfg") or "winecfg"
                 cmd = [winecfg_bin]
             else:
-                cmd = [proton_path, action]
+                cmd = [exec_bin, action]
                 if exe_path:
                     cmd.append(exe_path)
         else:
-            cmd = [proton_path, action]
+            cmd = [exec_bin, action]
             if action == "run" and exe_path:
                 cmd.append(exe_path)
             
@@ -557,17 +580,21 @@ class ProtonRunner:
         if action == "kill":
             cls.show_message("Đang tắt mọi tiến trình trong môi trường chạy này...", timeout=2)
             env = os.environ.copy()
-            env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = STEAM_PATH
-            env["STEAM_COMPAT_DATA_PATH"] = prefix_dir
-            proton_dir = os.path.dirname(proton_path)
-            wineserver_path = os.path.join(proton_dir, "files/bin/wineserver")
-            try:
-                if os.path.exists(wineserver_path):
-                    subprocess.run([wineserver_path, "-k"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                else:
-                    subprocess.run([proton_path, "run", "wineserver", "-k"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except Exception:
-                pass
+            env["WINEPREFIX"] = prefix_dir
+            if proton_path:
+                is_system_wine = "wine" in os.path.basename(proton_path).lower()
+                if not is_system_wine:
+                    env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = STEAM_PATH
+                    env["STEAM_COMPAT_DATA_PATH"] = prefix_dir
+                    proton_dir = os.path.dirname(proton_path)
+                    wineserver_path = os.path.join(proton_dir, "files/bin/wineserver")
+                    try:
+                        if os.path.exists(wineserver_path):
+                            subprocess.run([wineserver_path, "-k"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        else:
+                            subprocess.run([proton_path, "run", "wineserver", "-k"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    except Exception:
+                        pass
 
             cls.kill_processes_by_prefix(prefix_dir)
         else:

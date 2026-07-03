@@ -19,6 +19,7 @@ mkdir -p "${BUILD_DIR}/usr/bin"
 mkdir -p "${BUILD_DIR}/usr/share/applications"
 mkdir -p "${BUILD_DIR}/usr/share/micro-proton/src"
 mkdir -p "${BUILD_DIR}/usr/share/micro-proton/images"
+mkdir -p "${BUILD_DIR}/usr/share/pixmaps"
 
 # Copy executables and libraries
 cp micro-proton "${BUILD_DIR}/usr/bin/micro-proton"
@@ -26,6 +27,7 @@ cp micro-proton-indicator "${BUILD_DIR}/usr/bin/micro-proton-indicator"
 cp micro-proton-manager "${BUILD_DIR}/usr/bin/micro-proton-manager"
 cp -r src/* "${BUILD_DIR}/usr/share/micro-proton/src/"
 cp -r images/* "${BUILD_DIR}/usr/share/micro-proton/images/"
+cp images/logo.png "${BUILD_DIR}/usr/share/pixmaps/micro-proton.png"
 
 # Make sure they are executable
 chmod 755 "${BUILD_DIR}/usr/bin/micro-proton"
@@ -38,7 +40,7 @@ cat << 'EOF' > "${BUILD_DIR}/usr/share/applications/micro-proton-manager.desktop
 Name=Micro Proton Manager
 Comment=Manage Windows applications running under Proton
 Exec=micro-proton-manager
-Icon=steam
+Icon=micro-proton
 Terminal=false
 Type=Application
 Categories=Game;Utility;
@@ -49,7 +51,7 @@ cat << 'EOF' > "${BUILD_DIR}/usr/share/applications/micro-proton-indicator.deskt
 Name=Micro Proton Indicator
 Comment=System Tray Indicator for Micro Proton
 Exec=micro-proton-indicator
-Icon=steam
+Icon=micro-proton
 Terminal=false
 Type=Application
 Categories=Game;Utility;

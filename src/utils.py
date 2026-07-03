@@ -25,27 +25,38 @@ class ProtonUtils:
 
     @classmethod
     def find_proton_versions(cls):
-        """Finds all installed Proton versions in Steam directories and fallback to system wine."""
+        """Finds all installed Proton versions in Steam directories (including Flatpak) and fallback to system wine."""
         versions = []
         
-        # 1. Scan steamapps/common
-        if os.path.exists(cls.STEAM_COMMON):
-            for item in os.listdir(cls.STEAM_COMMON):
-                if item.startswith("Proton") and os.path.isdir(os.path.join(cls.STEAM_COMMON, item)):
-                    proton_script = os.path.join(cls.STEAM_COMMON, item, "proton")
-                    if os.path.exists(proton_script):
-                        versions.append((item, proton_script))
-                        
-        # 2. Scan compatibilitytools.d (custom Protons like Proton-GE)
-        compat_dir = os.path.join(cls.STEAM_PATH, "compatibilitytools.d")
-        if os.path.exists(compat_dir):
-            for item in os.listdir(compat_dir):
-                item_path = os.path.join(compat_dir, item)
-                if os.path.isdir(item_path):
-                    proton_script = os.path.join(item_path, "proton")
-                    if os.path.exists(proton_script):
-                        versions.append((item, proton_script))
-                        
+        # Define search directories for system and Flatpak Steam
+        search_sources = [
+            (cls.STEAM_COMMON, os.path.join(cls.STEAM_PATH, "compatibilitytools.d"))
+        ]
+        flatpak_steam_path = os.path.expanduser("~/.var/app/com.valvesoftware.Steam/.local/share/Steam")
+        if os.path.exists(flatpak_steam_path):
+            search_sources.append((
+                os.path.join(flatpak_steam_path, "steamapps/common"),
+                os.path.join(flatpak_steam_path, "compatibilitytools.d")
+            ))
+        
+        for common_dir, compat_dir in search_sources:
+            # 1. Scan steamapps/common
+            if os.path.exists(common_dir):
+                for item in os.listdir(common_dir):
+                    if item.startswith("Proton") and os.path.isdir(os.path.join(common_dir, item)):
+                        proton_script = os.path.join(common_dir, item, "proton")
+                        if os.path.exists(proton_script):
+                            versions.append((f"{item} (Flatpak)" if "com.valvesoftware.Steam" in common_dir else item, proton_script))
+                            
+            # 2. Scan compatibilitytools.d (custom Protons like Proton-GE)
+            if os.path.exists(compat_dir):
+                for item in os.listdir(compat_dir):
+                    item_path = os.path.join(compat_dir, item)
+                    if os.path.isdir(item_path):
+                        proton_script = os.path.join(item_path, "proton")
+                        if os.path.exists(proton_script):
+                            versions.append((f"{item} (Flatpak)" if "com.valvesoftware.Steam" in compat_dir else item, proton_script))
+                            
         # 3. Fallback to system wine
         wine_path = shutil.which("wine")
         if wine_path:
@@ -90,14 +101,39 @@ class ProtonUtils:
             extractor = IconExtractor(exe_path)
             extractor.export_icon(ico_output)
             
-            if shutil.which("convert"):
-                subprocess.run(["convert", ico_output, png_output], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # Use Pillow to convert to PNG
+            try:
+                from PIL import Image
+                with Image.open(ico_output) as img:
+                    best_size = (0, 0)
+                    best_frame = 0
+                    try:
+                        n_frames = getattr(img, "n_frames", 1)
+                        for i in range(n_frames):
+                            img.seek(i)
+                            if img.size[0] > best_size[0]:
+                                best_size = img.size
+                                best_frame = i
+                    except Exception:
+                        pass
+                    img.seek(best_frame)
+                    png_img = img.convert("RGBA")
+                    png_img.save(png_output, "PNG")
                 if os.path.exists(png_output):
                     try:
                         os.remove(ico_output)
                     except Exception:
                         pass
                     return png_output
+            except Exception:
+                if shutil.which("convert"):
+                    subprocess.run(["convert", ico_output, png_output], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    if os.path.exists(png_output):
+                        try:
+                            os.remove(ico_output)
+                        except Exception:
+                            pass
+                        return png_output
             return ico_output
         except Exception:
             # Fallback to wrestool (from icoutils) if icoextract is not available
@@ -108,6 +144,34 @@ class ProtonUtils:
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                     )
                     if os.path.exists(ico_output) and os.path.getsize(ico_output) > 0:
+                        # Try PIL conversion first on the extracted .ico
+                        try:
+                            from PIL import Image
+                            with Image.open(ico_output) as img:
+                                best_size = (0, 0)
+                                best_frame = 0
+                                try:
+                                    n_frames = getattr(img, "n_frames", 1)
+                                    for i in range(n_frames):
+                                        img.seek(i)
+                                        if img.size[0] > best_size[0]:
+                                            best_size = img.size
+                                            best_frame = i
+                                except Exception:
+                                    pass
+                                img.seek(best_frame)
+                                png_img = img.convert("RGBA")
+                                png_img.save(png_output, "PNG")
+                            if os.path.exists(png_output):
+                                try:
+                                    os.remove(ico_output)
+                                except Exception:
+                                    pass
+                                return png_output
+                        except Exception:
+                            pass
+                            
+                        # Fallback to icotool command
                         subprocess.run(["icotool", "-x", "-o", icon_dir, ico_output], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                         
                         # Find the largest extracted icon file (wrestool names them with suffixes)
@@ -133,66 +197,131 @@ class ProtonUtils:
         return "com.valvesoftware.Steam"
 
     @staticmethod
-    def select_file_via_zenity(title="Chọn file Windows (.exe)", initialdir=None):
+    def select_file_via_zenity(title="Chọn file Windows (.exe)", initialdir=None, parent=None):
+        import shutil
         if shutil.which("zenity"):
+            cmd = ["zenity", "--file-selection", f"--title={title}"]
+            if initialdir:
+                if not initialdir.endswith(os.sep):
+                    initialdir += os.sep
+                cmd.append(f"--filename={initialdir}")
+            cmd.append('--file-filter=Windows Executable (*.exe) | *.exe')
+            cmd.append('--file-filter=All files | *')
             try:
-                cmd = ["zenity", "--file-selection", f"--title={title}", "--file-filter=Executable files (*.exe) | *.exe"]
-                if initialdir and os.path.exists(initialdir):
-                    cmd.append(f"--filename={initialdir}/")
-                res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-                return res.stdout.strip()
-            except subprocess.CalledProcessError:
+                res = subprocess.run(cmd, capture_output=True, text=True)
+                if res.returncode == 0:
+                    path = res.stdout.strip()
+                    return path if path else None
                 return None
-        return filedialog.askopenfilename(
+            except Exception:
+                pass
+
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(
+            parent=parent,
             title=title,
             initialdir=initialdir,
             filetypes=[("Windows Executable", "*.exe"), ("All files", "*.*")]
         )
+        return path if path else None
 
     @staticmethod
-    def select_image_via_zenity(title="Chọn hình ảnh làm Icon", initialdir=None):
+    def select_image_via_zenity(title="Chọn hình ảnh làm Icon", initialdir=None, parent=None):
+        import shutil
         if shutil.which("zenity"):
+            cmd = ["zenity", "--file-selection", f"--title={title}"]
+            if initialdir:
+                if not initialdir.endswith(os.sep):
+                    initialdir += os.sep
+                cmd.append(f"--filename={initialdir}")
+            cmd.append('--file-filter=Image files | *.png *.jpg *.jpeg *.svg')
+            cmd.append('--file-filter=All files | *')
             try:
-                cmd = ["zenity", "--file-selection", f"--title={title}", "--file-filter=Image files (*.png *.jpg *.jpeg *.svg) | *.png *.jpg *.jpeg *.svg"]
-                if initialdir and os.path.exists(initialdir):
-                    cmd.append(f"--filename={initialdir}/")
-                res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-                return res.stdout.strip()
-            except subprocess.CalledProcessError:
+                res = subprocess.run(cmd, capture_output=True, text=True)
+                if res.returncode == 0:
+                    path = res.stdout.strip()
+                    return path if path else None
                 return None
-        return filedialog.askopenfilename(
+            except Exception:
+                pass
+
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(
+            parent=parent,
             title=title,
             initialdir=initialdir,
             filetypes=[("Image files", "*.png *.jpg *.jpeg *.svg"), ("All files", "*.*")]
         )
+        return path if path else None
 
     @staticmethod
-    def select_save_file_via_zenity(title="Lưu tệp", initialfile=None):
+    def select_save_file_via_zenity(title="Lưu tệp", initialfile=None, parent=None):
+        import shutil
         if shutil.which("zenity"):
+            cmd = ["zenity", "--file-selection", "--save", f"--title={title}"]
+            if initialfile:
+                cmd.append(f"--filename={initialfile}")
+            cmd.append('--file-filter=Zip Archive (*.zip) | *.zip')
+            cmd.append('--file-filter=All files | *')
             try:
-                cmd = ["zenity", "--file-selection", "--save", f"--title={title}", "--confirm-overwrite"]
-                if initialfile:
-                    cmd.append(f"--filename={initialfile}")
-                res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-                return res.stdout.strip()
-            except subprocess.CalledProcessError:
+                res = subprocess.run(cmd, capture_output=True, text=True)
+                if res.returncode == 0:
+                    path = res.stdout.strip()
+                    return path if path else None
                 return None
-        return filedialog.asksaveasfilename(
+            except Exception:
+                pass
+
+        from tkinter import filedialog
+        initialdir = os.path.dirname(initialfile) if initialfile else None
+        filename = os.path.basename(initialfile) if initialfile else None
+        path = filedialog.asksaveasfilename(
+            parent=parent,
             title=title,
-            initialfile=initialfile,
+            initialdir=initialdir,
+            initialfile=filename,
             filetypes=[("Zip Archive", "*.zip"), ("All files", "*.*")]
         )
+        return path if path else None
 
     @staticmethod
-    def select_zip_file_via_zenity(title="Chọn tệp .zip"):
+    def select_zip_file_via_zenity(title="Chọn tệp .zip", parent=None):
+        import shutil
         if shutil.which("zenity"):
+            cmd = ["zenity", "--file-selection", f"--title={title}"]
+            cmd.append('--file-filter=Zip Archive (*.zip) | *.zip')
+            cmd.append('--file-filter=All files | *')
             try:
-                cmd = ["zenity", "--file-selection", f"--title={title}", "--file-filter=Zip archives (*.zip) | *.zip"]
-                res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-                return res.stdout.strip()
-            except subprocess.CalledProcessError:
+                res = subprocess.run(cmd, capture_output=True, text=True)
+                if res.returncode == 0:
+                    path = res.stdout.strip()
+                    return path if path else None
                 return None
-        return filedialog.askopenfilename(
+            except Exception:
+                pass
+
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(
+            parent=parent,
             title=title,
             filetypes=[("Zip Archive", "*.zip"), ("All files", "*.*")]
         )
+        return path if path else None
+
+    @staticmethod
+    def get_screen_resolution():
+        """Detects the screen resolution and returns a suited size (85% of display)."""
+        try:
+            import tkinter as tk
+            root = tk.Tk()
+            root.withdraw()
+            sw = root.winfo_screenwidth()
+            sh = root.winfo_screenheight()
+            root.destroy()
+            if sw > 200 and sh > 200:
+                w = int(sw * 0.85) // 2 * 2
+                h = int(sh * 0.85) // 2 * 2
+                return f"{w}x{h}"
+        except Exception:
+            pass
+        return "1280x720"

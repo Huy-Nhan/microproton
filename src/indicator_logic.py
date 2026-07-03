@@ -13,12 +13,23 @@ gi.require_version('AppIndicator3', '0.1')
 from gi.repository import Gtk, AppIndicator3, GObject, GLib
 
 from src.utils import ProtonUtils
+from src.config import SettingsManager
 
 class ProtonIndicator:
     def __init__(self):
+        # Determine the logo icon path
+        base_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+        logo_path = os.path.join(base_dir, "images", "logo.png")
+        if not os.path.exists(logo_path):
+            logo_path = "/usr/share/micro-proton/images/logo.png"
+        if not os.path.exists(logo_path):
+            logo_path = "/usr/share/pixmaps/micro-proton.png"
+        if not os.path.exists(logo_path):
+            logo_path = "preferences-desktop-keyboard"
+
         self.indicator = AppIndicator3.Indicator.new(
             "micro-proton-indicator",
-            "preferences-desktop-keyboard",
+            logo_path,
             AppIndicator3.IndicatorCategory.APPLICATION_STATUS
         )
         self.indicator.set_status(AppIndicator3.IndicatorStatus.ACTIVE)
@@ -109,12 +120,42 @@ class ProtonIndicator:
                 except Exception:
                     pass
         else:
+            # Detect screen resolution or fall back
+            resolution = "1280x720"
+            try:
+                settings = SettingsManager.get_settings()
+                resolution = settings.get("global_resolution", "")
+            except Exception:
+                pass
+            
+            if not resolution or resolution == "Tự động":
+                resolution = ProtonUtils.get_screen_resolution()
+                
+            # Apply virtual desktop registry before launching
+            reg_vd_path = os.path.join(global_prefix, "virtual_desktop_global.reg")
+            try:
+                os.makedirs(global_prefix, exist_ok=True)
+                with open(reg_vd_path, "w") as f:
+                    f.write("Windows Registry Editor Version 5.00\n\n")
+                    f.write("[HKEY_CURRENT_USER\\Software\\Wine\\Explorer]\n")
+                    f.write('"Desktop"="Default"\n\n')
+                    f.write("[HKEY_CURRENT_USER\\Software\\Wine\\Explorer\\Desktops]\n")
+                    f.write(f'"Default"="{resolution}"\n')
+                
+                reg_env = env.copy()
+                if is_system_wine:
+                    subprocess.run([proton_path, "regedit", reg_vd_path], env=reg_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                else:
+                    subprocess.run([proton_path, "run", "regedit", reg_vd_path], env=reg_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception as e:
+                print(f"Error applying virtual desktop registry in indicator: {e}")
+                
             taskbar_env = env.copy()
             if not is_system_wine:
                 taskbar_env["PROTON_NO_PATH_TRANSLATION"] = "1"
-                subprocess.Popen([proton_path, "run", "explorer.exe", "/desktop=Default,1280x720"], env=taskbar_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.Popen([proton_path, "run", "explorer.exe", f"/desktop=Default,{resolution}", "explorer.exe"], env=taskbar_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             else:
-                subprocess.Popen([proton_path, "explorer.exe", "/desktop=Default,1280x720"], env=taskbar_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.Popen([proton_path, "explorer.exe", f"/desktop=Default,{resolution}", "explorer.exe"], env=taskbar_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def launch_unikey(self, widget):
         proton_versions = ProtonUtils.find_proton_versions()
@@ -254,11 +295,39 @@ class ProtonIndicator:
         parent_map = {}
         is_taskbar_running = False
         
+        wine_keywords = {"wine", "proton", "wineserver", "explorer.exe", "unikey", "conhost", "winedevice", "plugplay", "rpcss", "services.exe", "svchost.exe", "wineboot.exe"}
+        
         for pid_dir in glob.glob("/proc/[0-9]*"):
             pid = os.path.basename(pid_dir)
             try:
                 stat_info = os.stat(pid_dir)
                 if stat_info.st_uid != my_uid:
+                    continue
+                    
+                # 1. Cheap check on command name to reduce CPU overhead
+                comm_path = os.path.join(pid_dir, "comm")
+                comm_name = ""
+                if os.path.exists(comm_path):
+                    with open(comm_path, "r") as f:
+                        comm_name = f.read().strip().lower()
+                
+                is_candidate = False
+                for kw in wine_keywords:
+                    if kw in comm_name:
+                        is_candidate = True
+                        break
+                        
+                if not is_candidate:
+                    # Also check cmdline for python launcher, gamemode, or windows .exe binary
+                    cmdline_path = os.path.join(pid_dir, "cmdline")
+                    if os.path.exists(cmdline_path):
+                        with open(cmdline_path, "rb") as f:
+                            cmd_data = f.read()
+                        cmd_str = cmd_data.decode("utf-8", errors="ignore").lower()
+                        if "wine" in cmd_str or "proton" in cmd_str or "micro-proton" in cmd_str or ".exe" in cmd_str or ".exe" in comm_name:
+                            is_candidate = True
+                                
+                if not is_candidate:
                     continue
                     
                 stat_path = os.path.join(pid_dir, "stat")

@@ -27,6 +27,7 @@ mkdir -p %{buildroot}%{_bindir}
 mkdir -p %{buildroot}%{_datadir}/applications
 mkdir -p %{buildroot}%{_datadir}/micro-proton/src
 mkdir -p %{buildroot}%{_datadir}/micro-proton/images
+mkdir -p %{buildroot}%{_datadir}/pixmaps
 
 # Copy the executables and source modules
 cp %{_sourcedir}/micro-proton %{buildroot}%{_bindir}/micro-proton
@@ -34,6 +35,7 @@ cp %{_sourcedir}/micro-proton-indicator %{buildroot}%{_bindir}/micro-proton-indi
 cp %{_sourcedir}/micro-proton-manager %{buildroot}%{_bindir}/micro-proton-manager
 cp -r %{_sourcedir}/src/* %{buildroot}%{_datadir}/micro-proton/src/
 cp -r %{_sourcedir}/images/* %{buildroot}%{_datadir}/micro-proton/images/
+cp %{_sourcedir}/images/logo.png %{buildroot}%{_datadir}/pixmaps/micro-proton.png
 
 chmod 755 %{buildroot}%{_bindir}/micro-proton
 chmod 755 %{buildroot}%{_bindir}/micro-proton-indicator
@@ -45,7 +47,7 @@ cat << 'EOF' > %{buildroot}%{_datadir}/applications/micro-proton-manager.desktop
 Name=Micro Proton Manager
 Comment=Manage Windows applications running under Proton
 Exec=micro-proton-manager
-Icon=steam
+Icon=micro-proton
 Terminal=false
 Type=Application
 Categories=Game;Utility;
@@ -56,7 +58,7 @@ cat << 'EOF' > %{buildroot}%{_datadir}/applications/micro-proton-indicator.deskt
 Name=Micro Proton Indicator
 Comment=System Tray Indicator for Micro Proton
 Exec=micro-proton-indicator
-Icon=steam
+Icon=micro-proton
 Terminal=false
 Type=Application
 Categories=Game;Utility;
@@ -69,6 +71,7 @@ EOF
 %{_datadir}/applications/micro-proton-manager.desktop
 %{_datadir}/applications/micro-proton-indicator.desktop
 %{_datadir}/micro-proton
+%{_datadir}/pixmaps/micro-proton.png
 
 %changelog
 * Fri Jul 03 2026 Ryando <ryando@example.com> - 1.0.0-1
