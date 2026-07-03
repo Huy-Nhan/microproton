@@ -32,11 +32,13 @@ def get_exe_hash(exe_path):
     return hashlib.md5(abs_path.encode('utf-8')).hexdigest()[:8]
 
 def get_prefix_dir(exe_path):
-    """Returns the shared global Proton Prefix directory."""
+    """Returns the shared global Proton Prefix directory or a per-app directory."""
+    if exe_path:
+        return os.path.join(PREFIXES_DIR, f"prefix_{get_exe_hash(exe_path)}")
     return os.path.join(PREFIXES_DIR, "global_default")
 
 def find_proton_versions():
-    """Finds all installed Proton versions in Steam directories (common and compatibilitytools.d)."""
+    """Finds all installed Proton versions in Steam directories and fallback to system wine."""
     versions = []
     
     # 1. Scan steamapps/common
@@ -57,6 +59,11 @@ def find_proton_versions():
                 if os.path.exists(proton_script):
                     versions.append((item, proton_script))
                     
+    # 3. Fallback to system wine
+    wine_path = shutil.which("wine")
+    if wine_path:
+        versions.append(("System Wine (Fallback)", wine_path))
+        
     # Deduplicate by script path
     seen_paths = set()
     unique_versions = []
@@ -65,9 +72,11 @@ def find_proton_versions():
             seen_paths.add(path)
             unique_versions.append((name, path))
             
-    # Sort: Proton/GE-Proton 10.x first, then 9.x, then Experimental
+    # Sort: Proton/GE-Proton 10.x first, then 9.x, then Experimental, then System Wine
     def sort_key(v):
         name = v[0]
+        if "System Wine" in name:
+            return -1.0
         if "Experimental" in name:
             return 999.0
         numbers = re.findall(r"\d+", name)
@@ -91,7 +100,7 @@ def get_proton_path(proton_name):
             return path
     return versions[0][1] # Fallback
 
-def make_exec_line(prefix_dir, exe_path, proton="", mangohud=False, gamemode=False, wined3d=False, virtual_desktop="", unikey=False):
+def make_exec_line(prefix_dir, exe_path, proton="", mangohud=False, gamemode=False, wined3d=False, virtual_desktop="", unikey=False, taskbar=False):
     cmd = [f'"{MICRO_PROTON_BIN}"']
     if prefix_dir:
         cmd.extend(["--prefix", f'"{prefix_dir}"'])
@@ -107,35 +116,64 @@ def make_exec_line(prefix_dir, exe_path, proton="", mangohud=False, gamemode=Fal
         cmd.extend(["--virtual-desktop", f'"{virtual_desktop}"'])
     if unikey:
         cmd.append("--unikey")
+    if taskbar:
+        cmd.append("--taskbar")
     cmd.append(f'"{exe_path}"')
     return " ".join(cmd)
 
 def extract_app_icon(exe_path, app_hash):
-    """Extracts icon from exe using icoextract and converts to PNG if possible."""
+    """Extracts icon from exe using icoextract (or wrestool) and converts to PNG if possible."""
     icon_dir = os.path.expanduser("~/.local/share/icons")
     os.makedirs(icon_dir, exist_ok=True)
     
     ico_output = os.path.join(icon_dir, f"micro-proton-app-{app_hash}.ico")
     png_output = os.path.join(icon_dir, f"micro-proton-app-{app_hash}.png")
     
+    # 1. Try to extract icon
+    extracted = False
     try:
         from icoextract import IconExtractor
         extractor = IconExtractor(exe_path)
         extractor.export_icon(ico_output)
+        extracted = os.path.exists(ico_output)
+    except Exception:
+        pass
         
+    if not extracted and shutil.which("wrestool"):
+        try:
+            # Type 14 is Group Icon in Windows resources
+            subprocess.run(["wrestool", "-x", "-t", "14", exe_path, "-o", ico_output], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            extracted = os.path.exists(ico_output)
+        except Exception:
+            pass
+            
+    if extracted:
+        # 2. Try to convert to PNG
+        converted = False
         if shutil.which("convert"):
-            subprocess.run(["convert", ico_output, png_output], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if os.path.exists(png_output):
-                try:
-                    os.remove(ico_output)
-                except Exception:
-                    pass
-                return png_output
+            try:
+                subprocess.run(["convert", ico_output, png_output], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                converted = os.path.exists(png_output)
+            except Exception:
+                pass
                 
-        if os.path.exists(ico_output):
-            return ico_output
-    except Exception as e:
-        print(f"Error extracting icon for {exe_path}: {e}")
+        if not converted:
+            try:
+                from PIL import Image
+                img = Image.open(ico_output)
+                img.save(png_output, format="PNG")
+                converted = os.path.exists(png_output)
+            except Exception:
+                pass
+                
+        if converted:
+            try:
+                os.remove(ico_output)
+            except Exception:
+                pass
+            return png_output
+            
+        return ico_output
         
     return "com.valvesoftware.Steam"
 
@@ -162,7 +200,8 @@ def scan_apps():
             "gamemode": False,
             "wined3d": False,
             "virtual_desktop": "",
-            "unikey": False
+            "unikey": False,
+            "taskbar": False
         }
         
         try:
@@ -187,6 +226,7 @@ def scan_apps():
                 app_info["gamemode"] = "--gamemode" in exec_line
                 app_info["wined3d"] = "--wined3d" in exec_line
                 app_info["unikey"] = "--unikey" in exec_line
+                app_info["taskbar"] = "--taskbar" in exec_line
                 
                 # Parse --prefix
                 prefix_match = re.search(r'--prefix\s+"([^"]+)"', exec_line)
@@ -285,6 +325,16 @@ class AppManagerWindow:
         # Start periodic resource monitor loop
         self.update_resource_monitor()
         
+        # Start the desktop tray indicator in the background if it exists
+        indicator_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "micro-proton-indicator")
+        if os.path.exists(indicator_script):
+            subprocess.Popen([sys.executable, indicator_script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+    def deiconify_and_raise(self):
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+
     def build_left_panel(self):
         left_frame = ctk.CTkFrame(self.root, corner_radius=0)
         left_frame.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
@@ -317,17 +367,34 @@ class AppManagerWindow:
         self.scroll_list = ctk.CTkScrollableFrame(left_frame, label_text="Ứng dụng đã cài đặt")
         self.scroll_list.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 10))
         
-        # Download Proton button at bottom
+        # Bottom buttons container (Download Proton and Open Taskbar side-by-side)
+        bottom_btn_frame = ctk.CTkFrame(left_frame, fg_color="transparent")
+        bottom_btn_frame.grid(row=3, column=0, sticky="ew", padx=10, pady=10)
+        bottom_btn_frame.grid_columnconfigure((0, 1), weight=1)
+        
+        # Download Proton button
         btn_download_proton = ctk.CTkButton(
-            left_frame, 
-            text="📥 Tải & Cài đặt Proton-GE", 
-            font=("Helvetica", 12, "bold"), 
+            bottom_btn_frame, 
+            text="📥 Tải Proton-GE", 
+            font=("Helvetica", 11, "bold"), 
             fg_color="#2b2b2b", 
             hover_color="#3a3a3a",
             height=32,
             command=self.open_proton_downloader
         )
-        btn_download_proton.grid(row=3, column=0, sticky="ew", padx=15, pady=10)
+        btn_download_proton.grid(row=0, column=0, sticky="ew", padx=5)
+        
+        # Launch Windows Desktop button
+        btn_open_taskbar = ctk.CTkButton(
+            bottom_btn_frame, 
+            text="🖥️ Mở màn hình Windows", 
+            font=("Helvetica", 11, "bold"), 
+            fg_color="#2b2b2b", 
+            hover_color="#3a3a3a",
+            height=32,
+            command=self.launch_global_taskbar
+        )
+        btn_open_taskbar.grid(row=0, column=1, sticky="ew", padx=5)
         
     def build_right_panel(self):
         self.right_frame = ctk.CTkFrame(self.root, corner_radius=0, fg_color="transparent")
@@ -545,6 +612,16 @@ class AppManagerWindow:
         self.chk_unikey = ctk.CTkSwitch(ctrl_unikey, text="", variable=self.var_unikey, command=self.handle_unikey_toggle)
         self.chk_unikey.pack(padx=5, pady=5)
         
+        # Card 7: Windows Desktop
+        card_taskbar, ctrl_taskbar = self.create_setting_card(
+            container,
+            "Mở màn hình Windows (Desktop)",
+            "Tự động chạy màn hình ảo Windows (explorer.exe) khi khởi động ứng dụng để thao tác trực tiếp"
+        )
+        self.var_taskbar = tk.BooleanVar()
+        self.chk_taskbar = ctk.CTkSwitch(ctrl_taskbar, text="", variable=self.var_taskbar)
+        self.chk_taskbar.pack(padx=5, pady=5)
+        
         # Save button at bottom of scroll container
         self.btn_save_config = ctk.CTkButton(
             container, 
@@ -672,6 +749,7 @@ class AppManagerWindow:
         self.var_gamemode.set(app["gamemode"])
         self.var_wined3d.set(app["wined3d"])
         self.var_unikey.set(app.get("unikey", False))
+        self.var_taskbar.set(app.get("taskbar", False))
         
         if app["virtual_desktop"]:
             self.var_vd.set(True)
@@ -723,6 +801,8 @@ class AppManagerWindow:
             cmd.append("--wined3d")
         if app.get("unikey", False):
             cmd.append("--unikey")
+        if app.get("taskbar", False):
+            cmd.append("--taskbar")
         if app["virtual_desktop"]:
             cmd.extend(["--virtual-desktop", app["virtual_desktop"]])
             
@@ -775,17 +855,21 @@ class AppManagerWindow:
             else:
                 winetricks_path = local_winetricks
                 
-        # Setup environment variables for winetricks to run with Proton's Wine
+        # Setup environment variables for winetricks to run with Proton/Wine
         env = os.environ.copy()
         env["WINEPREFIX"] = os.path.join(app["prefix"], "pfx")
         
         proton_path = get_proton_path(app["proton"])
         if proton_path:
-            proton_dir = os.path.dirname(proton_path)
-            wine_path = os.path.join(proton_dir, "files/bin/wine")
-            if os.path.exists(wine_path):
-                env["WINE"] = wine_path
-                env["WINEARCH"] = "win64"
+            is_system_wine = "wine" in os.path.basename(proton_path).lower()
+            if is_system_wine:
+                env["WINE"] = proton_path
+            else:
+                proton_dir = os.path.dirname(proton_path)
+                wine_path = os.path.join(proton_dir, "files/bin/wine")
+                if os.path.exists(wine_path):
+                    env["WINE"] = wine_path
+                    env["WINEARCH"] = "win64"
                 
         # Run winetricks GUI in separate process
         try:
@@ -1006,6 +1090,7 @@ class AppManagerWindow:
             vd_val = self.opt_resolution.get()
             
         unikey_val = self.var_unikey.get()
+        taskbar_val = self.var_taskbar.get()
         
         exec_line = make_exec_line(
             prefix_dir=app["prefix"],
@@ -1015,7 +1100,8 @@ class AppManagerWindow:
             gamemode=gamemode_val,
             wined3d=wined3d_val,
             virtual_desktop=vd_val,
-            unikey=unikey_val
+            unikey=unikey_val,
+            taskbar=taskbar_val
         )
         
         desktop_path = app["desktop_file"]
@@ -1034,6 +1120,7 @@ class AppManagerWindow:
             app["wined3d"] = wined3d_val
             app["virtual_desktop"] = vd_val
             app["unikey"] = unikey_val
+            app["taskbar"] = taskbar_val
             
             subprocess.run(["update-desktop-database", APPLICATIONS_DIR])
             messagebox.showinfo("Thành công", "Đã lưu cấu hình trò chơi thành công!")
@@ -1084,6 +1171,41 @@ class AppManagerWindow:
 
     def open_proton_downloader(self):
         ProtonDownloaderDialog(self.root, self.refresh_proton_dropdown)
+
+    def launch_global_taskbar(self):
+        proton_versions = find_proton_versions()
+        if not proton_versions:
+            messagebox.showerror("Lỗi", "Không tìm thấy phiên bản Proton nào trên hệ thống.")
+            return
+            
+        proton_name, proton_path = proton_versions[0] # Default to newest
+        prefix_dir = get_prefix_dir("") # This returns global_default!
+        
+        # Get resolution from option menu
+        resolution = "1280x720"
+        try:
+            if hasattr(self, "opt_resolution") and self.opt_resolution:
+                resolution = self.opt_resolution.get()
+        except Exception:
+            pass
+
+        # Run explorer.exe in background
+        is_system_wine = "wine" in os.path.basename(proton_path).lower()
+        env = os.environ.copy()
+        env["WINEPREFIX"] = prefix_dir
+        if not is_system_wine:
+            env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = STEAM_PATH
+            env["STEAM_COMPAT_DATA_PATH"] = prefix_dir
+            env["PROTON_NO_PATH_TRANSLATION"] = "1"
+        
+        try:
+            if is_system_wine:
+                subprocess.Popen([proton_path, "explorer.exe", f"/desktop=Default,{resolution}"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                subprocess.Popen([proton_path, "run", "explorer.exe", f"/desktop=Default,{resolution}"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            messagebox.showinfo("Thành công", f"Đang khởi chạy màn hình ảo Windows ({resolution}) trong nền...")
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Không thể mở màn hình Windows ảo: {e}")
 
     def refresh_proton_dropdown(self):
         if self.selected_row:
@@ -1536,7 +1658,7 @@ class AddAppDialog(ctk.CTkToplevel):
         super().__init__(parent)
         self.callback = callback
         self.title("Thêm ứng dụng mới")
-        self.geometry("520x350")
+        self.geometry("520x390")
         
         self.after(250, lambda: self.grab_set())
         
@@ -1545,7 +1667,7 @@ class AddAppDialog(ctk.CTkToplevel):
         self.proton_versions = find_proton_versions()
         
         self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(5, weight=1)
+        self.grid_rowconfigure(6, weight=1)
         
         lbl_title = ctk.CTkLabel(self, text="Thêm ứng dụng Windows mới", font=("Helvetica", 16, "bold"))
         lbl_title.grid(row=0, column=0, columnspan=3, pady=(20, 15), padx=20, sticky="w")
@@ -1587,9 +1709,14 @@ class AddAppDialog(ctk.CTkToplevel):
         self.opt_proto.grid(row=4, column=1, columnspan=2, sticky="ew", padx=(5, 20), pady=5)
         self.opt_proto.set("Mặc định (Mới nhất)")
         
+        # Sandbox prefix option
+        self.var_sandbox = tk.BooleanVar(value=True)
+        self.chk_sandbox = ctk.CTkCheckBox(self, text="Sử dụng hộp cát riêng biệt (Sandbox prefix)", variable=self.var_sandbox, font=("Helvetica", 12))
+        self.chk_sandbox.grid(row=5, column=0, columnspan=3, sticky="w", padx=20, pady=5)
+        
         # Buttons
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.grid(row=5, column=0, columnspan=3, pady=(20, 15), padx=20, sticky="ew")
+        btn_frame.grid(row=6, column=0, columnspan=3, pady=(20, 15), padx=20, sticky="ew")
         
         btn_cancel = ctk.CTkButton(btn_frame, text="Hủy bỏ", fg_color="gray", hover_color="#555", command=self.destroy)
         btn_cancel.pack(side=tk.LEFT, padx=10, expand=True, fill=tk.X)
@@ -1645,7 +1772,9 @@ class AddAppDialog(ctk.CTkToplevel):
         exe_hash = get_exe_hash(exe)
         desktop_filename = f"micro-proton-app-{exe_hash}.desktop"
         desktop_path = os.path.join(APPLICATIONS_DIR, desktop_filename)
-        prefix_dir = get_prefix_dir(exe)
+        
+        sandbox_val = self.var_sandbox.get()
+        prefix_dir = get_prefix_dir(exe) if sandbox_val else get_prefix_dir(None)
         
         # Try to auto-extract icon from exe if it's default
         if icon == "com.valvesoftware.Steam":
@@ -1684,9 +1813,48 @@ X-MicroProton-Exe={exe}
             messagebox.showerror("Lỗi", f"Không thể lưu ứng dụng: {e}", parent=self)
 
 if __name__ == "__main__":
+    import socket
+    
+    # Single instance lock for manager GUI
+    _instance_socket = None
+    
+    def listen_for_raise(s, root_win, app_inst):
+        while True:
+            try:
+                conn, addr = s.accept()
+                data = conn.recv(1024)
+                if data == b"raise":
+                    root_win.after(0, app_inst.deiconify_and_raise)
+                conn.close()
+            except Exception:
+                break
+                
+    def check_single_instance(root_win, app_inst, port=18245):
+        global _instance_socket
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.bind(('127.0.0.1', port))
+            s.listen(1)
+            _instance_socket = s
+            threading.Thread(target=listen_for_raise, args=(s, root_win, app_inst), daemon=True).start()
+            return True
+        except socket.error:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.connect(('127.0.0.1', port))
+                s.sendall(b"raise")
+                s.close()
+            except Exception:
+                pass
+            return False
+
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("blue")
     
     root = ctk.CTk()
     app = AppManagerWindow(root)
+    
+    if not check_single_instance(root, app):
+        sys.exit(0)
+        
     root.mainloop()
