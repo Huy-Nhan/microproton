@@ -1379,8 +1379,27 @@ class AppManagerWindow:
 
     def update_resource_monitor(self):
         if self.selected_row:
-            app = self.selected_row.app_info
-            threading.Thread(target=self.scan_resources_async, args=(app["exe"],), daemon=True).start()
+            # Quick check if wineserver is running to avoid spawning thread when idle
+            wineserver_running = False
+            try:
+                for name in os.listdir("/proc"):
+                    if name.isdigit():
+                        try:
+                            with open(f"/proc/{name}/comm", "r") as f:
+                                if f.read().strip().lower() == "wineserver":
+                                    wineserver_running = True
+                                    break
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+                
+            if not wineserver_running:
+                if hasattr(self, "lbl_app_status"):
+                    self.lbl_app_status.configure(text="Trạng thái: Đang dừng", text_color="gray")
+            else:
+                app = self.selected_row.app_info
+                threading.Thread(target=self.scan_resources_async, args=(app["exe"],), daemon=True).start()
         else:
             if hasattr(self, "lbl_app_status"):
                 self.lbl_app_status.configure(text="Trạng thái: Đang dừng", text_color="gray")
@@ -1405,25 +1424,43 @@ class AppManagerWindow:
         target_pfx = os.path.abspath(prefix_dir)
         target_pfx_pfx = os.path.abspath(os.path.join(prefix_dir, "pfx"))
         
+        # 1. Quick check if wineserver is running to avoid unnecessary proc scanning (Idle state)
+        wineserver_running = False
+        pids_to_check = []
+        
+        for name in os.listdir("/proc"):
+            if not name.isdigit():
+                continue
+            comm_path = f"/proc/{name}/comm"
+            try:
+                # Direct read checks ownership & existence in one step, avoiding os.stat
+                with open(comm_path, "r") as f:
+                    comm_name = f.read().strip().lower()
+                pids_to_check.append((name, comm_name))
+                if comm_name == "wineserver":
+                    wineserver_running = True
+            except (PermissionError, FileNotFoundError):
+                continue
+            except Exception:
+                continue
+                
+        if not wineserver_running:
+            self.root.after(0, lambda: self.update_status_ui(False, 0.0, 0, 0))
+            return
+            
+        # 2. Wineserver is active, run detailed scan
         matched_pids = set()
         parent_map = {}
         
         wine_keywords = {"wine", "proton", "wineserver", "explorer.exe", "unikey", "conhost", "winedevice", "plugplay", "rpcss", "services.exe", "svchost.exe", "wineboot.exe"}
+        ignored_prefixes = ("chrome", "firefox", "code", "node", "slack", "discord", "gnome-shell", "bash", "fish", "zsh", "systemd", "dbus-daemon", "python3")
         
-        for pid_dir in glob.glob("/proc/[0-9]*"):
-            pid = os.path.basename(pid_dir)
-            try:
-                stat_info = os.stat(pid_dir)
-                if stat_info.st_uid != my_uid:
-                    continue
-                    
-                # 1. Cheap check on command name to reduce CPU overhead
-                comm_path = os.path.join(pid_dir, "comm")
-                comm_name = ""
-                if os.path.exists(comm_path):
-                    with open(comm_path, "r") as f:
-                        comm_name = f.read().strip().lower()
+        for pid, comm_name in pids_to_check:
+            # Skip common Linux desktop apps immediately to avoid reading their cmdline/environ
+            if comm_name.startswith(ignored_prefixes):
+                continue
                 
+            try:
                 is_candidate = False
                 for kw in wine_keywords:
                     if kw in comm_name:
@@ -1432,7 +1469,7 @@ class AppManagerWindow:
                         
                 if not is_candidate:
                     # Also check cmdline for python launcher, gamemode, or windows .exe binary
-                    cmdline_path = os.path.join(pid_dir, "cmdline")
+                    cmdline_path = f"/proc/{pid}/cmdline"
                     if os.path.exists(cmdline_path):
                         with open(cmdline_path, "rb") as f:
                             cmd_data = f.read()
@@ -1443,7 +1480,7 @@ class AppManagerWindow:
                 if not is_candidate:
                     continue
                     
-                stat_path = os.path.join(pid_dir, "stat")
+                stat_path = f"/proc/{pid}/stat"
                 ppid = "0"
                 if os.path.exists(stat_path):
                     with open(stat_path, "r") as f:
@@ -1456,7 +1493,7 @@ class AppManagerWindow:
                 parent_map[pid] = ppid
                 
                 # Check WINEPREFIX from /proc/<pid>/environ
-                environ_path = os.path.join(pid_dir, "environ")
+                environ_path = f"/proc/{pid}/environ"
                 if not os.path.exists(environ_path):
                     continue
                     
@@ -1477,7 +1514,7 @@ class AppManagerWindow:
                         matched_pids.add(pid)
                     else:
                         # Shared prefix: check cmdline to match the specific app
-                        cmdline_path = os.path.join(pid_dir, "cmdline")
+                        cmdline_path = f"/proc/{pid}/cmdline"
                         if os.path.exists(cmdline_path):
                             with open(cmdline_path, "rb") as f:
                                 cmd_data = f.read()

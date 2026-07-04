@@ -6,6 +6,7 @@ import re
 import shutil
 import glob
 import threading
+import resource
 from src.config import SettingsManager
 from src.utils import ProtonUtils
 
@@ -247,6 +248,15 @@ class ProtonRunner:
         """Runs Proton or Wine with the specified action and environment."""
         os.makedirs(prefix_dir, exist_ok=True)
         
+        # Try to raise file descriptor limit for Esync
+        try:
+            soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+            if soft < 524288:
+                target_soft = min(524288, hard)
+                resource.setrlimit(resource.RLIMIT_NOFILE, (target_soft, hard))
+        except Exception as e:
+            print(f"Không thể nâng giới hạn file descriptor cho Esync: {e}")
+            
         # Prevent wineserver version mismatch error by automatically clean up if necessary
         target_wineserver = cls.get_target_wineserver_path(proton_path)
         cls.kill_processes_by_prefix(prefix_dir, wineserver_only_mismatch=target_wineserver)
@@ -255,6 +265,12 @@ class ProtonRunner:
         env["WINEPREFIX"] = prefix_dir
         env["NO_AT_BRIDGE"] = "1"
         env["GTK_A11Y"] = "none"
+        
+        # Enable Esync, Fsync, and graphics thread optimizations
+        env["WINEESYNC"] = "1"
+        env["WINEFSYNC"] = "1"
+        env["__GL_THREADED_OPTIMIZATIONS"] = "1"
+        env["mesa_glthread"] = "true"
         
         is_system_wine = False
         if proton_path:
